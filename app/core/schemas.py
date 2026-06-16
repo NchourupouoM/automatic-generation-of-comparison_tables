@@ -1,6 +1,22 @@
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
+
+class CustomProperty(BaseModel):
+    """
+    Represents a single custom comparison axis as a key-value pair.
+    This replaces dynamic Dict[str, Any] to guarantee strict JSON Schema compliance.
+    """
+    property_name: str = Field(
+        ..., 
+        description="The clean name of the comparative metric or feature (e.g., 'accuracy', 'dataset_size', 'latency')."
+    )
+    property_value: str = Field(
+        ..., 
+        description="The exact extracted value corresponding to the property (e.g., '92.4%', '50k steps', '120ms')."
+    )
+
+
 class ComparisonRow(BaseModel):
     """
     Represents a single row in the comparative matrix, capturing bibliographic 
@@ -24,7 +40,7 @@ class ComparisonRow(BaseModel):
     
     publication_month: Optional[str] = Field(
         default=None,
-        description="The month of publication (e.g., 'June', 'December')."
+        description="The month of publication (e.g., 'June' or '06')."
     )
     
     publication_year: Optional[int] = Field(
@@ -54,17 +70,18 @@ class ComparisonRow(BaseModel):
     
     research_problem: str = Field(
         ...,
-        description="The exact scientific or technical problem the paper addresses. This is used as the key for clustering and comparing papers."
+        description="The exact scientific or technical problem the paper addresses."
     )
     
     research_method: Optional[str] = Field(
         default=None,
-        description="The primary research methodology employed by the authors (e.g., 'empirical evaluation', 'simulation', 'theoretical proof', 'extraction')."
+        description="The primary research methodology employed by the authors."
     )
     
-    domain_specific_properties: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="A dictionary capturing custom semantic properties (Phi) extracted for domain comparison (e.g., dataset used, accuracy, latency, model size)."
+    # Utilisation de la liste fortement typée pour satisfaire les contraintes d'OpenAI
+    domain_specific_properties: List[CustomProperty] = Field(
+        default_factory=list,
+        description="A list of custom domain-specific semantic properties (Phi) extracted for comparison."
     )
 
 
@@ -72,25 +89,48 @@ class ComparisonTable(BaseModel):
     """
     Represents a full comparative matrix aligned around a single unique research problem.
     """
-    
     research_problem: str = Field(
         ...,
         description="The shared research problem that groups all the comparative rows in this table together."
     )
-    
     rows: List[ComparisonRow] = Field(
         default_factory=list,
         description="The collection of comparison entries (rows) including the proposed contribution and its corresponding baseline methods."
     )
 
 
+# ---------------------------------------------------------------------------
+# Schémas de Sortie API (Formatés proprement pour l'utilisateur final)
+# ---------------------------------------------------------------------------
+class ConsolidatedComparisonRow(BaseModel):
+    """
+    Consolidated row for API consumers. Converts the list of properties 
+    back into a clean dictionary.
+    """
+    proceeding_title: Optional[str]
+    paper_title: str
+    authors: List[str]
+    publication_month: Optional[str]
+    publication_year: Optional[int]
+    venue: Optional[str]
+    research_field: Optional[str]
+    doi: Optional[str]
+    url: Optional[str]
+    research_problem: str
+    research_method: Optional[str]
+    domain_specific_properties: Dict[str, Any] 
+
+
+class ConsolidatedComparisonTable(BaseModel):
+    research_problem: str
+    rows: List[ConsolidatedComparisonRow]
+
+
 class ComparativeResult(BaseModel):
     """
-    The consolidated output returned by the Agentic Orchestrator.
-    It can contain one table (for single paper mode) or multiple tables (for conference proceedings).
+    Final consolidated output Schema returned by the API.
     """
-    
-    tables: List[ComparisonTable] = Field(
+    tables: List[ConsolidatedComparisonTable] = Field(
         default_factory=list,
-        description="A list containing one or more comparison tables generated from the processed document(s)."
+        description="A list containing one or more comparison tables formatted with clean key-value property dictionaries."
     )

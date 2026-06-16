@@ -1,6 +1,7 @@
 fastapi
 celery
 redis
+uvicorn
 pydantic
 pydantic-settings
 langchain
@@ -8,7 +9,10 @@ langchain-core
 langchain-community
 langchain-openai
 langchain-google-genai
+langchain-ollama
 langchain-anthropic
 pymupdf4llm
 langgraph
 python-multipart
+pandas
+streamlit
