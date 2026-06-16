@@ -1,5 +1,6 @@
 .venv
 .env
+datasets/
 __pycache__/
 *.pyc
 *.pyo
@@ -16,4 +17,3 @@ __pycache__/
 dist/
 build/
 *.egg
-datasets/
