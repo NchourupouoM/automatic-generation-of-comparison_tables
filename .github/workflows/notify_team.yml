@@ -49,6 +49,8 @@ jobs:
             --------------------------------------------------
             LAST COMMIT MESSAGE:
             "${{ github.event.head_commit.message }}"
+
+            NB: the first version of the benchmark dataset for evaluating the performance of the scientific papers content extractor is now on kaggle: https://www.kaggle.com/datasets/mohamednchourupouo/auto-extractor-system-of-papers-contributions
             --------------------------------------------------
 
             You can view the complete commit at the following address:
