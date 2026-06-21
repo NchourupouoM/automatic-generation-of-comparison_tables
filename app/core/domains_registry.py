@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 # Import des schémas de validation
 from app.domains.infectious_disease.schemas import InfectiousDiseaseComparisonTable
+from app.domains.nutritional_metabolic_diseases.schemas import NutritionalMetabolicComparisonTable
 from app.core.schemas import ComparisonTable
 
 
@@ -20,6 +21,10 @@ DOMAINS_REGISTRY: Dict[str, DomainConfig] = {
     "infectious-disease": DomainConfig(
         schema_class=InfectiousDiseaseComparisonTable,
         skill_path=Path("skills/infectious-disease-extraction")
+    ),
+    "nutritional-metabolic": DomainConfig(
+        schema_class=NutritionalMetabolicComparisonTable,
+        skill_path=Path("skills/nutritional-metabolic-diseases-extraction")
     ),
     "default": DomainConfig(
         schema_class=ComparisonTable,

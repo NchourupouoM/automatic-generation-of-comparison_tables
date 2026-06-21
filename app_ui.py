@@ -133,6 +133,69 @@ def render_infectious_disease_data(data_payload: Dict[str, Any]):
         mime="text/csv"
     )
 
+# 1. Ajout de la fonction d'aplatissement pour le nouveau domaine
+def flatten_nutritional_metabolic_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Flattens a specialized Nutritional and Metabolic Diseases row into 
+    first-class columns for side-by-side tabular comparison.
+    """
+    flat_row = {
+        "Paper Title/Study": row_dict.get("paper_title"),
+        "Authors": ", ".join(row_dict.get("authors", [])) if row_dict.get("authors") else "Unknown",
+        "Disease Name": row_dict.get("disease_name") or "N/A",
+        "Pathogen": row_dict.get("pathogen") or "N/A",
+        "Diet Type": row_dict.get("type_of_diet") or "N/A",
+        "Food Component": row_dict.get("food_component") or "N/A",
+        "Medical Treatment": row_dict.get("medical_treatment") or "N/A",
+        "Duration": row_dict.get("duration_of_intervention") or "N/A",
+        "Nutritional Deficiency": row_dict.get("nutritional_deficiency_associated_to_the_disease") or "N/A",
+        "Mechanism of Action": row_dict.get("mechanism_of_action") or "N/A",
+        "Causes/Etiology": row_dict.get("causes") or "N/A",
+        "Biomarkers": ", ".join(row_dict.get("biomarkers", [])) if row_dict.get("biomarkers") else "N/A",
+        "Symptoms": ", ".join(row_dict.get("has_symptom", [])) if row_dict.get("has_symptom") else "N/A",
+        "Outcome (Effectiveness)": row_dict.get("has_outcome") or "N/A",
+        "Study Population": row_dict.get("study_population") or "N/A",
+        "Geographical Area": row_dict.get("geographical_area") or "N/A",
+        "Follow-up Period": row_dict.get("follow_up_period") or "N/A",
+    }
+    
+    contrib = row_dict.get("contribution")
+    if contrib:
+        flat_row["Contribution: Problem"] = contrib.get("research_problem")
+        flat_row["Contribution: Result"] = contrib.get("result")
+    else:
+        flat_row["Contribution: Problem"] = "N/A (Prior Study)"
+        flat_row["Contribution: Result"] = "N/A (Prior Study)"
+        
+    return flat_row
+
+
+def render_nutritional_metabolic_data(data_payload: Dict[str, Any]):
+    """
+    Renders the complete Nutritional & Metabolic comparative table as a clean DataFrame.
+    """
+    research_problem = data_payload.get("research_problem", "Nutritional and Metabolic Study")
+    st.subheader(f"📊 Comparative Matrix: *{research_problem}*")
+    
+    raw_rows = data_payload.get("rows", [])
+    if not raw_rows:
+        st.warning("No comparative rows were extracted.")
+        return
+        
+    flat_rows = [flatten_nutritional_metabolic_row(row) for row in raw_rows]
+    df_display = pd.DataFrame(flat_rows)
+    
+    st.dataframe(df_display, use_container_width=True)
+    
+    csv_data = df_display.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="📥 Download Comparative Matrix as CSV",
+        data=csv_data,
+        file_name=f"nutritional_metabolic_comparison_{research_problem.lower().replace(' ', '_')}.csv",
+        mime="text/csv"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 3. Composants d'Interface (UI)
 # ---------------------------------------------------------------------------
@@ -153,7 +216,11 @@ if uploaded_file is not None:
     with col2:
         domain_option = st.selectbox(
             "Scientific Domain Template",
-            options=["General Academic (Default)", "Infectious Disease"],
+            options=[""
+            "General Academic (Default)", 
+            "Infectious Disease",
+            "Nutritional and Metabolic Diseases"
+            ],
             help="Select 'Infectious Disease' to target pathogens, diets, clinical interventions, and biomarkers."
         )
         
@@ -161,11 +228,13 @@ if uploaded_file is not None:
     doc_type_mapping = {
         "Auto-detect": "auto", 
         "Single Research Paper": "single", 
-        "Conference Proceeding": "proceeding"
+        "Conference Proceeding": "proceeding",
+        "Nutritional and Metabolic Diseases": "nutritional-metabolic"
     }
     domain_mapping = {
         "General Academic (Default)": "default", 
-        "Infectious Disease": "infectious-disease"
+        "Infectious Disease": "infectious-disease",
+        "Nutritional and Metabolic Diseases": "nutritional-metabolic"
     }
     
     api_doc_type = doc_type_mapping[doc_type_option]
@@ -238,6 +307,10 @@ if uploaded_file is not None:
             if domain_used == "infectious-disease":
                 # Rendu spécifique par fiche clinique descriptive pour Infectious Disease
                 render_infectious_disease_data(data_payload)
+                
+            elif domain_used == "nutritional-metabolic":
+                # Rendu du nouveau domaine
+                render_nutritional_metabolic_data(data_payload)
                 
             else:
                 # Rendu par tableaux comparatifs classiques avec baselines
