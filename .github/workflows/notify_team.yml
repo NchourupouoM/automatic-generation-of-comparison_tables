@@ -1,4 +1,3 @@
-# .github/workflows/notify_team.yml
 name: Email Team Notification on Push
 
 on:
