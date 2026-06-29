@@ -6,7 +6,7 @@ on:
 
 env:
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GCP_REGION: us-central1
+  GCP_REGION: europe-west9
   GAR_REPO: scientific-extractor-repo
   IMAGE_NAME: extractor-app
 
