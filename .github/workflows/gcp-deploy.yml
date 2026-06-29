@@ -48,7 +48,7 @@ jobs:
           --platform managed \
           --allow-unauthenticated \
           --port 8000 \
-          --set-env-vars "REDIS_URL=${{ secrets.REDIS_URL }},OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }},LLM_PROVIDER=openai,LLM_MODEL_NAME=gpt-4o"
+          --set-env-vars "REDIS_URL=${{ secrets.REDIS_URL }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},LLM_PROVIDER=google,LLM_MODEL_NAME=gemini-3.1-flash-lite"
 
     - name: Deploy Celery Worker to Cloud Run
       run: |
@@ -58,9 +58,9 @@ jobs:
           --platform managed \
           --no-use-polling \
           --no-cpu-throttling \
-          --command "celery" \
-          --args "-A,app.core.celery_app:celery_app,worker,--loglevel=info,-P,solo" \
-          --set-env-vars "REDIS_URL=${{ secrets.REDIS_URL }},OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }},LLM_PROVIDER=openai,LLM_MODEL_NAME=gpt-4o"
+          --command=celery \
+          --args=-A,app.core.celery_app:celery_app,worker,--loglevel=info,-P,solo \
+          --set-env-vars "REDIS_URL=${{ secrets.REDIS_URL }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},LLM_PROVIDER=google,LLM_MODEL_NAME=gemini-3.1-flash-lite"
   notify:
     name: Send Commit Notification
     runs-on: ubuntu-latest
