@@ -56,7 +56,6 @@ jobs:
           --image europe-west9-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
           --region ${{ env.GCP_REGION }} \
           --platform managed \
-          --no-use-polling \
           --no-cpu-throttling \
           --command=celery \
           --args=-A,app.core.celery_app:celery_app,worker,--loglevel=info,-P,solo \
