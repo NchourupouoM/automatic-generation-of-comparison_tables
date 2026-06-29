@@ -1,0 +1,117 @@
+name: Dynamic Scientific Extractor CI/CD to GCP
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-central1
+  GAR_REPO: scientific-extractor-repo
+  IMAGE_NAME: extractor-app
+
+jobs:
+  deploy:
+    name: Build, Push, and Serverless Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Authenticate with Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Docker to use GAR Authenticator
+      run: |
+        gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+    - name: Build and Push Unified Docker Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:latest
+
+    - name: Deploy FastAPI Web App to Cloud Run
+      run: |
+        gcloud run deploy scientific-extractor-web \
+          --image us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --region ${{ env.GCP_REGION }} \
+          --platform managed \
+          --allow-unauthenticated \
+          --port 8000 \
+          --set-env-vars "REDIS_URL=${{ secrets.REDIS_URL }},OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }},LLM_PROVIDER=openai,LLM_MODEL_NAME=gpt-4o"
+
+    - name: Deploy Celery Worker to Cloud Run
+      run: |
+        gcloud run deploy scientific-extractor-worker \
+          --image us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --region ${{ env.GCP_REGION }} \
+          --platform managed \
+          --no-use-polling \
+          --no-cpu-throttling \
+          --command "celery" \
+          --args "-A,app.core.celery_app:celery_app,worker,--loglevel=info,-P,solo" \
+          --set-env-vars "REDIS_URL=${{ secrets.REDIS_URL }},OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }},LLM_PROVIDER=openai,LLM_MODEL_NAME=gpt-4o"
+  notify:
+    name: Send Commit Notification
+    runs-on: ubuntu-latest
+    needs: deploy 
+
+    steps:
+      # 1. Récupération du code (requis pour accéder au contexte du commit)
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Envoi de l'e-mail via l'action communautaire de référence
+      - name: Send Email to Pair Programming Team
+        uses: dawidd6/action-send-mail@v4
+        with:
+          # Configuration du serveur SMTP (récupérée de manière sécurisée via les secrets)
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          
+          # Destinataires (liste d'e-mails séparés par des virgules)
+          to: ${{ secrets.TEAM_EMAILS }}
+          
+          # Expéditeur
+          from: "GitHub Actions <${{ secrets.SMTP_USERNAME }}>"
+          
+          # Sujet du mail dynamique
+          subject: "[GitHub Push] New commit detected on ${{ github.repository }}"
+          
+          # Corps du mail contenant le message du dernier commit
+          body: |
+            Hello Team,
+
+            A new push has been detected on the repository ${{ github.repository }}.
+
+            Event details:
+            - Branch: ${{ github.ref_name }}
+            - Author: ${{ github.event.head_commit.author.name }} (<${{ github.event.head_commit.author.email }}>)
+
+            --------------------------------------------------
+            LAST COMMIT MESSAGE:
+            "${{ github.event.head_commit.message }}"
+
+            NB: the first version of the benchmark dataset for evaluating the performance of the scientific papers content extractor is now on kaggle: https://www.kaggle.com/datasets/mohamednchourupouo/auto-extractor-system-of-papers-contributions
+            --------------------------------------------------
+
+            You can view the complete commit at the following address:
+            ${{ github.event.head_commit.url }}
+
+            Best regards,
+            Automatic scientific Papers content extractor
+          
+          # Type de contenu (texte brut pour garantir la lisibilité sur tous les clients)
+          content_type: text/plain

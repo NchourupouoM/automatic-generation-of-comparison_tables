@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scientific Comparative Matrix Extractor</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <h1>📊 Scientific Comparative Matrix Extractor</h1>
+            <p class="subtitle">Extract clinical parameters, structure academic comparisons, and export validated CSV data.</p>
+        </header>
+
+        <main class="main-content">
+            <!-- Panneau de Configuration -->
+            <section class="config-section card">
+                <h2>⚙️ Extraction Settings</h2>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="doc-type">Document Scale Type</label>
+                        <select id="doc-type">
+                            <option value="auto">Auto-detect (Let AI analyze)</option>
+                            <option value="single">Single Research Paper</option>
+                            <option value="proceeding">Conference Proceeding</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="domain-type">Scientific Domain Template</label>
+                        <select id="domain-type">
+                            <option value="default">General Academic (Default)</option>
+                            <option value="infectious-disease">Infectious Disease</option>
+                            <option value="nutritional-metabolic">Nutritional & Metabolic Diseases</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Dropzone de dépôt du fichier -->
+                <div class="dropzone" id="pdf-dropzone">
+                    <input type="file" id="file-input" accept="application/pdf" style="display: none;">
+                    <div class="dropzone-content">
+                        <span class="icon">📁</span>
+                        <p class="text">Drag and drop your scientific PDF here, or <span class="highlight">browse files</span></p>
+                        <p class="file-name" id="selected-file-name"></p>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" id="btn-start" disabled>🚀 Start Extraction Task</button>
+            </section>
+
+            <!-- Statut de la Tâche de fond (Celery) -->
+            <section class="status-section card hidden" id="status-card">
+                <h2>🔄 Task Progress</h2>
+                <div class="status-container">
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="progress-bar"></div>
+                    </div>
+                    <p class="status-message" id="status-message">Initializing task...</p>
+                    <p class="task-id">Task ID: <span id="display-task-id"></span></p>
+                </div>
+            </section>
+
+            <!-- Zone d'affichage des Résultats -->
+            <section class="results-section card hidden" id="results-card">
+                <div class="results-header">
+                    <h2 id="table-title">📋 Extracted Comparative Matrix</h2>
+                    <button class="btn btn-success" id="btn-download-csv">📥 Download CSV</button>
+                </div>
+                <div class="table-wrapper">
+                    <table class="data-table" id="results-table">
+                        <thead>
+                            <tr id="table-headers"></tr>
+                        </thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
