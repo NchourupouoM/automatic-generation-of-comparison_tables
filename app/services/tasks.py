@@ -16,28 +16,24 @@ class ExtractionTask(Task):
         super().on_failure(exc, task_id, args, kwargs, einfo)
 
 
-@celery_app.task(
-    bind=True, 
-    base=ExtractionTask, 
-    name="app.services.tasks.run_extraction"
-)
-def run_extraction_task(self, pdf_path: str,  manual_document_type: str = "auto", domain: str = "default") -> dict:
-    """
-    Asynchronous task wrapper that executes the LangGraph state machine.
-    """
-    logger.info(f"Task initiated: {self.request.id} for file {pdf_path}")
-    
-    # Mise à jour préliminaire du statut pour l'utilisateur
+# app/services/tasks.py (Mise à jour ciblée)
+
+@celery_app.task(bind=True, name="app.services.tasks.run_extraction")
+def run_extraction_task(
+    self, 
+    raw_markdown: str,  # Devient directement la chaîne Markdown
+    manual_document_type: str = "auto", 
+    domain: str = "default"
+) -> dict:
     self.update_state(
         state="PROCESSING", 
-        meta={"progress_status": "Extracting document layout and classifying scale"}
+        meta={"progress_status": f"Initializing execution for domain: '{domain}'"}
     )
     
     try:
-        # Initialisation de l'état du graphe
+        # Initialisation de l'état du graphe avec le Markdown déjà présent
         state_input = {
-            "pdf_path": pdf_path,
-            "raw_markdown": "",
+            "raw_markdown": raw_markdown,  # Injecté directement
             "manual_document_type": manual_document_type,
             "document_type": "single",
             "domain": domain,
@@ -46,13 +42,8 @@ def run_extraction_task(self, pdf_path: str,  manual_document_type: str = "auto"
             "consolidated_result": {}
         }
         
-        # Invocation synchrone au sein du worker Celery
         final_state = orchestrator_graph.invoke(state_input)
-        
-        logger.info(f"Task completed successfully: {self.request.id}")
         return final_state["consolidated_result"]
         
     except Exception as e:
-        logger.error(f"Execution error in orchestration pipeline: {str(e)}")
-        # Nous levons l'exception pour permettre à Celery de marquer la tâche en statut FAILURE
         raise e

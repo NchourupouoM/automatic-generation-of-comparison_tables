@@ -352,7 +352,7 @@ def build_orchestrator_graph() -> StateGraph:
     workflow = StateGraph(GraphState)
     
     # Déclaration des nœuds
-    workflow.add_node("extract_text", extract_text_node)
+    # workflow.add_node("extract_text", extract_text_node)
     workflow.add_node("classify_document", classify_document_node)
     workflow.add_node("baseline_identifier", baseline_identifier_agent)
     workflow.add_node("segment_and_cluster", segmenter_and_clusterer_agent)
@@ -363,8 +363,8 @@ def build_orchestrator_graph() -> StateGraph:
     workflow.add_node("process_domain_single_paper", process_domain_single_paper_node)
     
     # Tracé des flux de contrôle
-    workflow.set_entry_point("extract_text")
-    workflow.add_edge("extract_text", "classify_document")
+    workflow.set_entry_point("classify_document")
+    # workflow.add_edge("extract_text", "classify_document")
     
     # Routage conditionnel enrichi
     workflow.add_conditional_edges(

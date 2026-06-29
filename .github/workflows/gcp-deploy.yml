@@ -47,8 +47,7 @@ jobs:
           --region ${{ env.GCP_REGION }} \
           --platform managed \
           --allow-unauthenticated \
-          --port 8000 \
-          --set-env-vars "REDIS_URL=${{ secrets.REDIS_URL }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},LLM_PROVIDER=google,LLM_MODEL_NAME=gemini-3.1-flash-lite"
+          --port 8000
 
     - name: Deploy Celery Worker to Cloud Run
       run: |
@@ -59,8 +58,7 @@ jobs:
           --no-cpu-throttling \
           --port=8080 \
           --command=sh \
-          --args="-c,python3 -m http.server 8080 & celery -A app.core.celery_app:celery_app worker --loglevel=info -P solo" \
-          --set-env-vars "REDIS_URL=${{ secrets.REDIS_URL }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},LLM_PROVIDER=google,LLM_MODEL_NAME=gemini-3.1-flash-lite"
+          --args="-c,python3 -m http.server 8080 & celery -A app.core.celery_app:celery_app worker --loglevel=info -P solo"
   notify:
     name: Send Commit Notification
     runs-on: ubuntu-latest

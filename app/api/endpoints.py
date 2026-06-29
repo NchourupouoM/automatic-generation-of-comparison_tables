@@ -6,42 +6,28 @@ from celery.result import AsyncResult
 
 from app.core.celery_app import celery_app
 from app.services.tasks import run_extraction_task
+from app.core.domains_registry import DOMAINS_REGISTRY
+from app.core.parse_pdf import extract_pdf_to_markdown
 
 router = APIRouter()
-
-
-# app/api/endpoints.py (Mise à jour ciblée)
 
 @router.post("/ingest", status_code=202)
 async def ingest_document(
     file: UploadFile = File(...),
-    document_type: str = Form(
-        default="auto",
-        description="Override document scale classification. Allowed values: 'auto', 'single', 'proceeding'"
-    ),
-    domain: str = Form(
-        default="default",
-        description="Target scientific domain template. e.g., 'default', 'infectious-disease'"
-    )
+    document_type: str = Form(default="auto"),
+    domain: str = Form(default="default")
 ):
-    """
-    Ingests a scientific PDF document with optional domain-specific and scale overrides.
-    """
     normalized_type = document_type.lower().strip()
     normalized_domain = domain.lower().strip()
     
-    # Validation du domaine par rapport au registre
-    from app.core.domains_registry import DOMAINS_REGISTRY
     if normalized_domain not in DOMAINS_REGISTRY:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported domain '{normalized_domain}'. Supported domains: {list(DOMAINS_REGISTRY.keys())}"
-        )
+        raise HTTPException(status_code=400, detail="Unsupported domain.")
 
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
     try:
+        # Sauvegarde temporaire sur le conteneur API pour conversion
         temp_dir = Path(tempfile.gettempdir()) / "scientific_extractor"
         temp_dir.mkdir(parents=True, exist_ok=True)
         dest_file_path = temp_dir / file.filename
@@ -49,18 +35,24 @@ async def ingest_document(
         with dest_file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
+        # 1. Extraction immédiate du PDF en Markdown sur le serveur API
+        raw_markdown = extract_pdf_to_markdown(str(dest_file_path))
+        
+        # 2. Suppression immédiate du fichier physique pour libérer la mémoire du conteneur
+        dest_file_path.unlink()
+            
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"File save error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"PDF parsing error: {str(e)}")
     finally:
         await file.close()
 
-    # Transmission du domaine et du type de document à Celery
-    task = run_extraction_task.delay(str(dest_file_path), normalized_type, normalized_domain)
+    # 3. Transmission de la chaîne de texte brute au lieu du chemin de fichier
+    task = run_extraction_task.delay(raw_markdown, normalized_type, normalized_domain)
     
     return {
         "task_id": task.id,
         "status": "PENDING",
-        "detail": f"Processing in domain '{normalized_domain}' started."
+        "detail": f"Processing in domain '{normalized_domain}' started with in-memory parsing."
     }
 
 @router.get("/tasks/{task_id}")
