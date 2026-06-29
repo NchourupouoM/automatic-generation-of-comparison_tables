@@ -29,7 +29,7 @@ jobs:
 
     - name: Configure Docker to use GAR Authenticator
       run: |
-        gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+        gcloud auth configure-docker europe-west9-docker.pkg.dev --quiet
 
     - name: Build and Push Unified Docker Image
       uses: docker/build-push-action@v5
@@ -37,13 +37,13 @@ jobs:
         context: .
         push: true
         tags: |
-          us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:latest
+          europe-west9-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          europe-west9-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:latest
 
     - name: Deploy FastAPI Web App to Cloud Run
       run: |
         gcloud run deploy scientific-extractor-web \
-          --image us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --image europe-west9-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
           --region ${{ env.GCP_REGION }} \
           --platform managed \
           --allow-unauthenticated \
@@ -53,7 +53,7 @@ jobs:
     - name: Deploy Celery Worker to Cloud Run
       run: |
         gcloud run deploy scientific-extractor-worker \
-          --image us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --image europe-west9-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
           --region ${{ env.GCP_REGION }} \
           --platform managed \
           --no-use-polling \
