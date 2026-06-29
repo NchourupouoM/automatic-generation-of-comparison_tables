@@ -57,8 +57,9 @@ jobs:
           --region ${{ env.GCP_REGION }} \
           --platform managed \
           --no-cpu-throttling \
-          --command=celery \
-          --args=-A,app.core.celery_app:celery_app,worker,--loglevel=info,-P,solo \
+          --port=8080 \
+          --command=sh \
+          --args="-c,python3 -m http.server 8080 & celery -A app.core.celery_app:celery_app worker --loglevel=info -P solo" \
           --set-env-vars "REDIS_URL=${{ secrets.REDIS_URL }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},LLM_PROVIDER=google,LLM_MODEL_NAME=gemini-3.1-flash-lite"
   notify:
     name: Send Commit Notification
