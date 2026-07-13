@@ -4,6 +4,7 @@ import uuid  # <-- AJOUT IMPORTATION GLOBALE
 from pathlib import Path
 from typing import Dict, List, Any, Literal, Optional
 from typing_extensions import TypedDict
+from psycopg.rows import dict_row
 
 from langgraph.graph import StateGraph, END
 # IMPORTATION DU PERSISTEUR POSTGRES DE LANGGRAPH
@@ -487,7 +488,7 @@ def get_orchestrator_graph():
             conninfo=settings.DATABASE_URL,
             max_size=5,
             min_size=1,
-            kwargs={"autocommit": True}
+            kwargs={"autocommit": True, "row_factory": dict_row}
         )
         
         checkpointer = PostgresSaver(connection_pool)
