@@ -19,3 +19,5 @@ streamlit
 sqlalchemy
 psycopg2-binary
 psycopg_pool
+langgraph-checkpoint-postgres
+psycopg[pool]
