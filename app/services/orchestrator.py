@@ -1,218 +1,128 @@
+# app/services/orchestrator.py (Version Finale d'Élite)
 import logging
+import uuid  # <-- AJOUT IMPORTATION GLOBALE
 from pathlib import Path
-from typing import Dict, List, Any, Literal
+from typing import Dict, List, Any, Literal, Optional
 from typing_extensions import TypedDict
 
 from langgraph.graph import StateGraph, END
+# IMPORTATION DU PERSISTEUR POSTGRES DE LANGGRAPH
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg_pool import ConnectionPool
+
 from pydantic import BaseModel, Field
+import json
+import re
 
 from app.core.config import settings
 from app.core.llm_factory import LLMFactory
-from app.core.parse_pdf import extract_pdf_to_markdown
-from app.core.schemas import ComparisonRow, ComparativeResult, ConsolidatedComparisonTable, ConsolidatedComparisonRow
+from app.core.database import SessionLocal
+from app.core.models import TemplateModel, ValidationTaskModel, ComparisonTableModel, ExtractedRowModel
+from app.core.dynamic_loader import compile_dynamic_table_model, save_new_template_to_db
+from app.core.schemas import ComparisonTable
 from app.core.skills_loader import SkillLoader
 
+# Importation des prompts isolés
+from app.core.prompts import (
+    CLASSIFIER_PROMPT,
+    PROPOSE_PROPERTIES_PROMPT,
+    SEGMENTER_CLUSTERER_PROMPT,
+    ACADEMIC_EXTRACTION_PROMPT,
+    RECOMMEND_TEMPLATE_PROMPT
+)
+
 from skills.structuralclustering.scripts.cluster_papers import SegmentationManifest
-from app.core.domains_registry import DOMAINS_REGISTRY
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# 1. Définition de l'état du Graphe
+# 1. Structure de l'État du Graphe (GraphState)
 # ---------------------------------------------------------------------------
 class PaperTask(BaseModel):
-    """Represents a micro-task for extracting one specific paper's row."""
     title: str
     authors: List[str] = []
     text_segment: str
+    domain_hint: Optional[str] = None
 
 
 class GraphState(TypedDict):
-    pdf_path: str
     raw_markdown: str
     manual_document_type: str
     document_type: Literal["single", "proceeding"]
-    
-    # Liste de tâches individuelles d'extraction à réaliser (Pour le domaine par défaut)
+    domain: str
+    celery_task_id: str
     extraction_tasks: List[PaperTask]
-    
-    # Résultats d'extractions individuelles accumulées (ComparisonRow - Domaine par défaut)
-    extracted_rows: List[ComparisonRow]
-    
-    # Résultat final structuré (S'adapte dynamiquement au domaine sélectionné)
+    extracted_rows: List[Any]
+    proposed_properties: List[Dict[str, str]]
+    validated_schema_json: Dict[str, Any]
     consolidated_result: Dict[str, Any]
 
-    domain: str  # e.g., "default", "infectious-disease"
-
 
 # ---------------------------------------------------------------------------
-# 2. Modèles intermédiaires pour les agents spécialisés
+# 2. Modèles de routage intermédiaires
 # ---------------------------------------------------------------------------
-class BaselineList(BaseModel):
-    """Schema for the Baseline Identifier Agent."""
-    proposed_method_title: str = Field(..., description="The main contribution title of the paper.")
-    baselines: List[str] = Field(
-        default_factory=list, 
-        description="List of baseline model names or previous works compared in the paper's evaluation."
-    )
-
-
 class DocumentClassification(BaseModel):
     document_type: Literal["single", "proceeding"]
 
 
-# ---------------------------------------------------------------------------
-# 3. Nœuds des Agents Granulaires (Nodes)
-# ---------------------------------------------------------------------------
+class ProposedProperty(BaseModel):
+    name: str = Field(..., description="Lowercase snake_case name.")
+    description: str = Field(..., description="English description.")
 
-def extract_text_node(state: GraphState) -> Dict[str, Any]:
-    """Deterministic step: calls programmatic utility to read PDF."""
-    markdown_content = extract_pdf_to_markdown(state["pdf_path"])
-    return {"raw_markdown": markdown_content}
 
+class ProposedPropertiesList(BaseModel):
+    properties: List[ProposedProperty]
+
+
+class SuggestionProperty(BaseModel):
+    name: str = Field(..., description="The property name in snake_case.")
+    description: str = Field(..., description="English description/guideline.")
+    type: str = Field(default="str", description="Data type: 'str', 'int', 'list_str', 'bool'")
+
+
+class RecommendationResult(BaseModel):
+    decision: Literal["match", "new"] = Field(..., description="Select 'match' or 'new'.")
+    matched_template_id: Optional[str] = Field(default=None)
+    proposed_domain_key: Optional[str] = Field(default=None)
+    proposed_domain_name: Optional[str] = Field(default=None)
+    proposed_properties: List[SuggestionProperty] = Field(default_factory=list)
+    rationale: str = Field(..., description="Reasoning.")
+
+
+# ---------------------------------------------------------------------------
+# 3. Nœuds des Agents Coordonnés (Nodes)
+# ---------------------------------------------------------------------------
 
 def classify_document_node(state: GraphState) -> Dict[str, Any]:
-    """
-    Agent: Classifies document scale or applies manual override to save LLM tokens.
-    """
-    # 1. Vérification si un override manuel a été fourni
     manual_type = state.get("manual_document_type", "auto")
-    
     if manual_type in ["single", "proceeding"]:
-        logger.info(
-            f"Node: classify_document_node bypassed. "
-            f"Applying manual override classification: '{manual_type}' to save tokens."
-        )
         return {"document_type": manual_type}
         
-    # 2. Exécution de la détection automatique sémantique si 'auto'
-    logger.info("Node: classify_document_node running automatic LLM classification.")
     llm = LLMFactory.get_llm()
     structured_classifier = llm.with_structured_output(DocumentClassification)
     
     sample_text = state["raw_markdown"][:4000]
+    prompt = CLASSIFIER_PROMPT.format(sample_text=sample_text)
     
-    prompt = f"""
-    Analyze the introduction of this scientific document and classify if it is:
-    - A 'single' research paper (focusing on one main contribution, method, and evaluation).
-    - A 'proceeding' (acts, table of contents, or book volume containing multiple distinct research papers).
-    
-    Document sample:
-    ---
-    {sample_text}
-    ---
-    """
     try:
         classification = structured_classifier.invoke(prompt)
-        logger.info(f"Auto-detection classified as: {classification.document_type}")
         return {"document_type": classification.document_type}
-    except Exception as e:
-        logger.warning(f"Auto-classification failed, defaulting to 'single'. Error: {str(e)}")
+    except Exception:
         return {"document_type": "single"}
 
 
-# --- BRANCHE PAPIER UNIQUE SPÉCIALISÉ PAR DOMAINE (Nouveau Nœud) ---
-
-def process_domain_single_paper_node(state: GraphState) -> Dict[str, Any]:
-    """
-    Agent: Specialized Single Paper Extractor.
-    Extracts highly specific clinical or scientific variables for non-default domains (e.g., 'infectious-disease').
-    Loads instructions dynamically from the target domain's SKILL.md.
-    """
-    target_domain = state.get("domain", "default")
-    domain_config = DOMAINS_REGISTRY.get(target_domain, DOMAINS_REGISTRY["default"])
-    
-    logger.info(f"Agent: process_domain_single_paper_node started for domain '{target_domain}'")
-    
-    # Chargement dynamique des instructions de la compétence du domaine
-    _, instructions = SkillLoader.load_skill(domain_config.skill_path)
-    
-    llm = LLMFactory.get_llm()
-    structured_llm = llm.with_structured_output(domain_config.schema_class, method="function_calling")
-    
-    prompt = f"""
-    SYSTEM SKILL INSTRUCTIONS (Loaded dynamically from {domain_config.skill_path}):
-    =======================================================
-    {instructions}
-    =======================================================
-    
-    TASK INPUT:
-    Extract the structured representation of the target paper.
-    Ensure all domain-specific variables are populated accurately and formatted cleanly.
-    
-    Paper Content:
-    ---
-    {state["raw_markdown"][:50000]}
-    ---
-    """
-    try:
-        extracted_data = structured_llm.invoke(prompt)
-        
-        # Structure de retour standardisée pour l'API
-        payload = {
-            "domain": target_domain,
-            "data": extracted_data.model_dump()
-        }
-        return {"consolidated_result": payload}
-    except Exception as e:
-        logger.error(f"Failed specialized extraction for domain '{target_domain}': {str(e)}")
-        raise e
-
-
-# --- BRANCHE PAPIER UNIQUE PAR DÉFAUT (Case A) ---
-
-def baseline_identifier_agent(state: GraphState) -> Dict[str, Any]:
-    """
-    Agent 1 (Case A): Baseline Identifier.
-    Job: Read the paper and identify only the main proposed method and the list of compared baselines.
-    """
-    logger.info("Agent: baseline_identifier_agent running.")
-    llm = LLMFactory.get_llm()
-    structured_llm = llm.with_structured_output(BaselineList, method="function_calling")
-    
-    prompt = f"""
-    Analyze the following research paper. Identify:
-    1. The exact name of the Proposed Method or contribution of this paper.
-    2. The names of the Related Baselines/Methods this paper compares itself against in the evaluation section.
-    
-    Paper Content:
-    ---
-    {state['raw_markdown'][:30000]}
-    ---
-    """
-    result = structured_llm.invoke(prompt)
-    
-    # On crée une liste de micro-tâches d'extraction : le papier principal + les baselines
-    tasks = [PaperTask(title=result.proposed_method_title, text_segment=state["raw_markdown"])]
-    for baseline in result.baselines:
-        tasks.append(PaperTask(title=baseline, text_segment=state["raw_markdown"]))
-        
-    return {"extraction_tasks": tasks}
-
-
-# --- BRANCHE RECUEIL D'ACTES PAR DÉFAUT (Case B) ---
-
-def segmenter_and_clusterer_agent(state: GraphState) -> Dict[str, Any]:
-    """
-    Agent 1 (Case B): Segmenter and Clusterer.
-    Job: Split proceeding and group papers by research problem.
-    """
-    logger.info("Agent: segmenter_and_clusterer_agent running.")
+def segmenter_and_clusterer_node(state: GraphState) -> Dict[str, Any]:
+    logger.info("Agent: segmenter_and_clusterer_node running.")
     _, instructions = SkillLoader.load_skill(Path("skills/structuralclustering"))
     
     llm = LLMFactory.get_llm()
     structured_llm = llm.with_structured_output(SegmentationManifest, method="function_calling")
     
-    prompt = f"""
-    SYSTEM SKILL INSTRUCTIONS:
-    {instructions}
-    
-    Input proceeding text:
-    ---
-    {state['raw_markdown'][:60000]}
-    ---
-    """
+    prompt = SEGMENTER_CLUSTERER_PROMPT.format(
+        instructions=instructions,
+        raw_markdown=state["raw_markdown"][:60000]
+    )
     manifest = structured_llm.invoke(prompt)
     
     tasks = []
@@ -220,172 +130,371 @@ def segmenter_and_clusterer_agent(state: GraphState) -> Dict[str, Any]:
         tasks.append(PaperTask(
             title=paper.title,
             authors=paper.authors,
-            text_segment=state["raw_markdown"][:15000]
+            text_segment=state["raw_markdown"][:15000],
+            domain_hint=paper.research_problem
         ))
     return {"extraction_tasks": tasks}
 
 
-# --- NŒUDS COMMUNS ---
+def domain_detector_node(state: GraphState) -> Dict[str, Any]:
+    """
+    Agent: Domain Detector.
+    Queries PostgreSQL template registry. If the schema is missing OR is 'default',
+    system forces a dynamic schema validation flow to guarantee structured output.
+    """
+    # 1. Récupération du domaine actuel de l'état
+    target_domain = state.get("domain", "default")
+    
+    # 2. Si le domaine est "default" et que nous avons des fragments de proceedings,
+    # nous extrayons le véritable domaine sémantique cible depuis le premier fragment (chunk)
+    if target_domain == "default" and state.get("extraction_tasks"):
+        detected_domain = state["extraction_tasks"][0].domain_hint or "default"
+        target_domain = detected_domain.lower().replace(" ", "-")
+        # Nettoyage des caractères non-alphanumériques pour obtenir une clé saine
+        target_domain = re.sub(r'[^a-z0-9\-]', '', target_domain)
 
-def feature_extractor_agent(state: GraphState) -> Dict[str, Any]:
-    """
-    Agent 2 (Common): Academic Feature Extractor.
-    Job: Extract properties for ONE paper task at a time.
-    """
-    logger.info("Agent: feature_extractor_agent running.")
-    _, instructions = SkillLoader.load_skill(Path("skills/academicextraction"))
+    logger.info(f"Agent: Detecting schema validation registry for domain: '{target_domain}'")
+    
+    # 3. Vérification de la présence du domaine dans le registre PostgreSQL
+    with SessionLocal() as db:
+        template_record = db.query(TemplateModel).filter(TemplateModel.id == target_domain).first()
+        
+        # Si le gabarit existe ET n'est pas "default" -> On peut extraire directement
+        if template_record and target_domain != "default":
+            logger.info(f"Domain '{target_domain}' detected in database registry. Proceeding to extraction.")
+            tasks = state.get("extraction_tasks", [])
+            if not tasks:
+                tasks = [PaperTask(title="Proposed Study", text_segment=state["raw_markdown"])]
+                
+            return {"domain": target_domain, "extraction_tasks": tasks}
+        else:
+            # CORRECTIF CRITIQUE : Si absent ou égal à "default", nous redirigeons vers le Proposer
+            # MAIS nous conservons 'target_domain' (le domaine réel extrait) dans l'état !
+            # Cela garantit que le Proposer génère des suggestions et enregistre la tâche de validation
+            # sous la véritable clé sémantique (ex: 'benchmarking-retrieval...') au lieu de 'default' [3].
+            logger.warning(f"Domain '{target_domain}' requires dynamic schema proposal. Redirecting to Proposer.")
+            return {"domain": target_domain, "extraction_tasks": []}
+
+
+def recommend_template_for_paper(sample_text: str) -> dict:
+    with SessionLocal() as db:
+        templates = db.query(TemplateModel).all()
+        existing_schemas = [
+            {"id": t.id, "name": t.name, "properties": [p["name"] for p in t.schema_json.get("fields", [])]}
+            for t in templates
+        ]
+
+    llm = LLMFactory.get_llm()
+    structured_llm = llm.with_structured_output(RecommendationResult, method="function_calling")
+    
+    prompt = RECOMMEND_TEMPLATE_PROMPT.format(
+        existing_schemas_list=json.dumps(existing_schemas, indent=2) if existing_schemas else "No existing schemas.",
+        abstract_text=sample_text[:5000]
+    )
+    
+    try:
+        recommendation = structured_llm.invoke(prompt)
+        return recommendation.model_dump()
+    except Exception as e:
+        return {
+            "decision": "new",
+            "proposed_domain_key": "custom-domain",
+            "proposed_domain_name": "Custom Domain",
+            "proposed_properties": [{"name": "key_metric", "type": "str", "description": "The primary outcome measure."}],
+            "rationale": f"Recommendation failed: {str(e)}"
+        }
+
+
+def template_proposer_node(state: GraphState) -> Dict[str, Any]:
+    target_domain = state.get("domain", "custom_domain")
+    logger.info(f"Agent: Formulating suggested properties for domain '{target_domain}'")
     
     llm = LLMFactory.get_llm()
-    structured_llm = llm.with_structured_output(ComparisonRow, method="function_calling")
+    structured_llm = llm.with_structured_output(ProposedPropertiesList, method="function_calling")
+    prompt = PROPOSE_PROPERTIES_PROMPT.format(domain_name=target_domain)
     
-    rows: List[ComparisonRow] = []
+    try:
+        suggestions = structured_llm.invoke(prompt)
+        properties = [prop.model_dump() for prop in suggestions.properties]
+        
+        celery_id = state.get("celery_task_id")
+        if celery_id:
+            import uuid
+            with SessionLocal() as db:
+                task_uuid = uuid.UUID(celery_id)
+                existing = db.query(ValidationTaskModel).filter(ValidationTaskModel.task_id == task_uuid).first()
+                if not existing:
+                    new_task = ValidationTaskModel(
+                        task_id=task_uuid,
+                        status="PENDING_SCHEMA_VALIDATION",
+                        proposed_properties=properties,
+                        raw_markdown=state["raw_markdown"],
+                        domain=target_domain,
+                        document_type=state.get("document_type", "single")
+                    )
+                    db.add(new_task)
+                    db.commit()
+                    logger.info(f"Successfully registered active HITL interrupt in PostgreSQL: {celery_id}")
+                    
+        return {"proposed_properties": properties}
+    except Exception as e:
+        logger.error(f"Failed to propose properties: {str(e)}")
+        return {"proposed_properties": []}
+
+
+def template_validator_node(state: GraphState) -> Dict[str, Any]:
+    logger.info("Agent: Human checkpoint validated. Resuming pipeline execution.")
+    target_domain = state.get("domain", "custom")
+    
+    with SessionLocal() as db:
+        template_record = db.query(TemplateModel).filter(TemplateModel.id == target_domain).first()
+        if not template_record:
+            raise ValueError(f"Resumed failed: No validated template found for '{target_domain}'.")
+            
+    tasks = [PaperTask(title="Proposed Study", text_segment=state["raw_markdown"])]
+    return {"extraction_tasks": tasks}
+
+
+def academic_features_extraction_node(state: GraphState) -> Dict[str, Any]:
+    """
+    Agent: Academic Features Extraction.
+    Implements a Deep Agent Self-Correction Loop / Validation Gate.
+    """
+    target_domain = state.get("domain", "default")
+    logger.info(f"Agent: Academic Features Extractor running for domain '{target_domain}'")
+    
+    _, instructions = SkillLoader.load_skill(Path("skills/academicextraction"))
+    
+    if target_domain == "default":
+        target_schema = ComparisonTable
+    else:
+        with SessionLocal() as db:
+            target_schema = compile_dynamic_table_model(target_domain, db)
+        
+    llm = LLMFactory.get_llm()
+    structured_llm = llm.with_structured_output(target_schema, method="function_calling")
+    
+    rows = []
     
     for task in state["extraction_tasks"]:
-        logger.info(f"Extracting features for paper: '{task.title}'")
-        prompt = f"""
-        SYSTEM SKILL INSTRUCTIONS:
-        {instructions}
+        prompt = ACADEMIC_EXTRACTION_PROMPT.format(
+            instructions=instructions,
+            paper_content=task.text_segment
+        )
         
-        TASK INSTRUCTIONS:
-        Extract comparative features for the target paper: '{task.title}'
-        If authors are provided, use them.
+        # ---------------------------------------------------------------------------
+        # BOUCLE D'AUTO-CORRECTION SÉMANTIQUE DE DEEP AGENT (Quality Gate)
+        # ---------------------------------------------------------------------------
+        max_attempts = 3
+        extracted_table = None
         
-        Source Text segment:
-        ---
-        {task.text_segment}
-        ---
-        """
-        try:
-            row = structured_llm.invoke(prompt)
-            row.paper_title = task.title
-            if task.authors and not row.authors:
-                row.authors = task.authors
-            rows.append(row)
-        except Exception as e:
-            logger.warning(f"Failed feature extraction for paper '{task.title}': {str(e)}")
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info(f" -> Extraction attempt {attempt}/{max_attempts} for paper '{task.title}'")
+                extracted_table = structured_llm.invoke(prompt)
+                
+                # CORRECTION : Utilisation de l'index 'index > 0' pour désigner les baselines
+                for index, row in enumerate(extracted_table.rows):
+                    if index > 0 and len(row.authors) > 0 and set(row.authors) == set(task.authors):
+                        raise ValueError(
+                            f"Context Leakage Detected: Baseline row '{row.paper_title}' incorrectly inherited "
+                            f"the primary paper's author list {task.authors}. Baselines are independent papers."
+                        )
+                break
+                
+            except Exception as e:
+                logger.warning(f" -> Quality Gate Rejected attempt {attempt} for '{task.title}': {str(e)}")
+                if attempt == max_attempts:
+                    logger.error(f" -> Deep Agent auto-correction exhausted. Abandoning.")
+                    break
+                
+                prompt = f"""
+                PREVIOUS ATTEMPT FAILED WITH ERROR:
+                {str(e)}
+                
+                Please strictly correct your JSON payload. Make sure baseline rows do NOT inherit the primary paper's authors, DOI, or URL.
+                
+                {ACADEMIC_EXTRACTION_PROMPT.format(instructions=instructions, paper_content=task.text_segment)}
+                """
+        
+        if extracted_table:
+            rows.append(extracted_table)
             
     return {"extracted_rows": rows}
 
 
-def table_synthesizer_agent(state: GraphState) -> Dict[str, Any]:
-    """
-    Agent 3 (Common): Comparison Table Synthesizer.
-    Job: Consolidate extracted rows, transform List[CustomProperty] back to Dict[str, Any],
-    and construct the final validated API output structure.
-    """
-    logger.info("Agent: table_synthesizer_agent running.")
-    raw_rows = state["extracted_rows"]
+def table_synthesizer_node(state: GraphState) -> Dict[str, Any]:
+    logger.info("Agent: Synthetizer running database persistence.")
+    extracted_tables = state["extracted_rows"]
+    target_domain = state.get("domain", "default")
     
-    consolidated_rows: List[ConsolidatedComparisonRow] = []
-    for row in raw_rows:
-        dict_properties = {
-            prop.property_name: prop.property_value 
-            for prop in row.domain_specific_properties
-        }
-        
-        consolidated_rows.append(
-            ConsolidatedComparisonRow(
-                proceeding_title=row.proceeding_title,
-                paper_title=row.paper_title,
-                authors=row.authors,
-                publication_month=row.publication_month,
-                publication_year=row.publication_year,
-                venue=row.venue,
-                research_field=row.research_field,
-                doi=row.doi,
-                url=row.url,
-                research_problem=row.research_problem,
-                research_method=row.research_method,
-                domain_specific_properties=dict_properties
-            )
-        )
-    
-    if state["document_type"] == "proceeding":
-        clusters: Dict[str, List[ConsolidatedComparisonRow]] = {}
-        for row in consolidated_rows:
-            prob = row.research_problem or "General Research"
-            if prob not in clusters:
-                clusters[prob] = []
-            clusters[prob].append(row)
-            
-        tables = [
-            ConsolidatedComparisonTable(research_problem=p, rows=r) 
-            for p, r in clusters.items()
-        ]
-    else:
-        common_problem = consolidated_rows[0].research_problem if consolidated_rows else "General Research"
-        tables = [
-            ConsolidatedComparisonTable(research_problem=common_problem, rows=consolidated_rows)
-        ]
-        
-    result = ComparativeResult(tables=tables)
-    
-    # Format de retour unifié
-    response_payload = {
-        "domain": "default",
-        "data": result.model_dump()
+    STANDARD_FIELDS = {
+        "paper_title", "authors", "publication_month", "publication_year", 
+        "venue", "research_field", "doi", "url", "research_problem", "research_method"
     }
-    return {"consolidated_result": response_payload}
+    
+    persisted_tables_payload = []
+    
+    with SessionLocal() as db:
+        for table_data in extracted_tables:
+            research_prob = table_data.research_problem
+            
+            db_table = ComparisonTableModel(
+                id=uuid.uuid4(),
+                research_problem=research_prob,
+                domain=target_domain if target_domain != "default" else None
+            )
+            db.add(db_table)
+            db.flush()
+            
+            rows_payload = []
+            for index, row in enumerate(table_data.rows):
+                row_dict = row.model_dump()
+                
+                bibliographic_meta = {}
+                domain_specific_phi = {}
+                
+                for key, val in row_dict.items():
+                    if key in STANDARD_FIELDS:
+                        bibliographic_meta[key] = val
+                    else:
+                        domain_specific_phi[key] = val
+                
+                is_proposed = (index == 0)
+                
+                db_row = ExtractedRowModel(
+                    id=uuid.uuid4(),
+                    table_id=db_table.id,
+                    paper_title=row.paper_title,
+                    authors=row.authors,
+                    is_proposed_method=is_proposed,
+                    bibliographic_metadata=bibliographic_meta,
+                    domain_properties=domain_specific_phi
+                )
+                db.add(db_row)
+                
+                rows_payload.append({
+                    "paper_title": row.paper_title,
+                    "authors": row.authors,
+                    "is_proposed_method": is_proposed,
+                    "domain_specific_properties": domain_specific_phi,
+                    **bibliographic_meta
+                })
+            
+            db.commit()
+            
+            persisted_tables_payload.append({
+                "table_id": str(db_table.id),
+                "research_problem": research_prob,
+                "rows": rows_payload
+            })
+            
+    return {
+        "consolidated_result": {
+            "domain": target_domain,
+            "document_type": state.get("document_type", "single"),
+            "tables": persisted_tables_payload
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
-# 4. Construction et Compilation du Graphe
+# 4. Routeurs et liaisons logiques du Graphe
 # ---------------------------------------------------------------------------
-def route_by_scale_and_domain(state: GraphState) -> Literal["single_default_flow", "single_domain_flow", "proceeding_flow"]:
-    """
-    Routes the execution graph dynamically.
-    - Proceeds to 'proceeding_flow' if dealing with proceedings.
-    - Proceeds to 'single_domain_flow' if it's a single paper targeting a specialized domain (e.g., 'infectious-disease').
-    - Otherwise, routes to 'single_default_flow' for the classic comparative pipeline.
-    """
-    if state.get("document_type") == "proceeding":
+def route_by_document_scale(state: GraphState) -> Literal["proceeding_flow", "single_flow"]:
+    if state["document_type"] == "proceeding":
         return "proceeding_flow"
-        
-    domain = state.get("domain", "default")
-    if domain != "default":
-        return "single_domain_flow"
-        
-    return "single_default_flow"
+    return "single_flow"
+
+def route_start_node(state: GraphState) -> Literal["classify_document", "segment_and_cluster", "domain_detector"]:
+    manual_type = state.get("manual_document_type", "auto")
+    if manual_type == "single":
+        return "domain_detector"
+    elif manual_type == "proceeding":
+        return "segment_and_cluster"
+    return "classify_document"
+
+def route_by_domain_registry_presence(state: GraphState) -> Literal["has_schema_flow", "propose_schema_flow"]:
+    if state.get("extraction_tasks"):
+        return "has_schema_flow"
+    return "propose_schema_flow"
 
 
 def build_orchestrator_graph() -> StateGraph:
     workflow = StateGraph(GraphState)
     
-    # Déclaration des nœuds
-    # workflow.add_node("extract_text", extract_text_node)
     workflow.add_node("classify_document", classify_document_node)
-    workflow.add_node("baseline_identifier", baseline_identifier_agent)
-    workflow.add_node("segment_and_cluster", segmenter_and_clusterer_agent)
-    workflow.add_node("feature_extractor", feature_extractor_agent)
-    workflow.add_node("table_synthesizer", table_synthesizer_agent)
+    workflow.add_node("segment_and_cluster", segmenter_and_clusterer_node)
+    workflow.add_node("domain_detector", domain_detector_node)
+    workflow.add_node("template_proposer", template_proposer_node)
+    workflow.add_node("template_validator", template_validator_node)
+    workflow.add_node("academic_features_extraction", academic_features_extraction_node)
+    workflow.add_node("synthesizer", table_synthesizer_node)
     
-    # Enregistrement du nouveau nœud dynamique
-    workflow.add_node("process_domain_single_paper", process_domain_single_paper_node)
-    
-    # Tracé des flux de contrôle
-    workflow.set_entry_point("classify_document")
-    # workflow.add_edge("extract_text", "classify_document")
-    
-    # Routage conditionnel enrichi
-    workflow.add_conditional_edges(
-        "classify_document",
-        route_by_scale_and_domain,
+    workflow.set_conditional_entry_point(
+        route_start_node,
         {
-            "single_default_flow": "baseline_identifier",
-            "single_domain_flow": "process_domain_single_paper",
-            "proceeding_flow": "segment_and_cluster"
+            "classify_document": "classify_document",
+            "segment_and_cluster": "segment_and_cluster",
+            "domain_detector": "domain_detector"
         }
     )
     
-    workflow.add_edge("baseline_identifier", "feature_extractor")
-    workflow.add_edge("segment_and_cluster", "feature_extractor")
-    workflow.add_edge("feature_extractor", "table_synthesizer")
+    workflow.add_conditional_edges(
+        "classify_document",
+        route_by_document_scale,
+        {
+            "proceeding_flow": "segment_and_cluster",
+            "single_flow": "domain_detector"
+        }
+    )
     
-    # Points terminaux
-    workflow.add_edge("table_synthesizer", END)
-    workflow.add_edge("process_domain_single_paper", END)
+    workflow.add_edge("segment_and_cluster", "domain_detector")
     
-    return workflow.compile()
+    workflow.add_conditional_edges(
+        "domain_detector",
+        route_by_domain_registry_presence,
+        {
+            "has_schema_flow": "academic_features_extraction",
+            "propose_schema_flow": "template_proposer"
+        }
+    )
+    
+    workflow.add_edge("template_proposer", "template_validator")
+    workflow.add_edge("template_validator", "academic_features_extraction")
+    workflow.add_edge("academic_features_extraction", "synthesizer")
+    workflow.add_edge("synthesizer", END)
+    
+    return workflow
 
 
-orchestrator_graph = build_orchestrator_graph()
+# ---------------------------------------------------------------------------
+# 5. CHARGEMENT DYNAMIQUE DU PERSISTEUR LANGGRAPH DANS LE WORKER (Lazy Loading) [3]
+# ---------------------------------------------------------------------------
+_orchestrator_graph = None
+
+def get_orchestrator_graph():
+    """
+    Compiles the LangGraph StateMachine with an active PostgresSaver connection pool
+    ONLY inside the active worker process turn, avoiding Celery multi-process SSL decryption errors [3].
+    """
+    global _orchestrator_graph
+    if _orchestrator_graph is None:
+        logger.info("Compiling LangGraph StateMachine with dynamic PostgresSaver connection pool...")
+        
+        # Le pool est créé et ouvert spécifiquement au sein du worker actif
+        connection_pool = ConnectionPool(
+            conninfo=settings.DATABASE_URL,
+            max_size=5,
+            min_size=1,
+            kwargs={"autocommit": True}
+        )
+        
+        checkpointer = PostgresSaver(connection_pool)
+        checkpointer.setup() # Crée automatiquement la table de checkpoints si manquante [3]
+        
+        _orchestrator_graph = build_orchestrator_graph().compile(
+            checkpointer=checkpointer,
+            interrupt_before=["template_validator"]
+        )
+    return _orchestrator_graph

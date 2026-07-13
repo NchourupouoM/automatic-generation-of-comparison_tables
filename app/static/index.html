@@ -1,84 +1,283 @@
+<!-- app/static/index.html (Version Finale d'Élite Rétablie) -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Scientific Comparative Matrix Extractor</title>
+    <title>ORKG - Scientific Agentic Extractor Dashboard</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="app-container">
-        <header class="app-header">
-            <h1>Scientific Comparative Matrix Extractor</h1>
-            <p class="subtitle">Extract clinical parameters, structure academic comparisons, and export validated CSV data.</p>
-        </header>
+    <div class="dashboard-wrapper">
+        <!-- BARRE DE NAVIGATION LATÉRALE (SIDEBAR) -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <svg class="logo-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 11V19C4 20.1046 4.89543 21 6 21H18C19.1046 21 20 20.1046 20 19V11" stroke="#e86161" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M12 2L4 8V11H20V8L12 2Z" fill="#e86161"/>
+                    <circle cx="12" cy="14" r="2" fill="#fff"/>
+                </svg>
+                <h2>ORKG <span>Extractor</span></h2>
+            </div>
+            <nav class="sidebar-nav">
+                <button class="nav-link active" data-tab="extraction">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                    New Extraction
+                </button>
+                <button class="nav-link" data-tab="hitl">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+                    Validation Queue <span class="badge" id="hitl-badge">0</span>
+                </button>
+                <button class="nav-link" data-tab="templates">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                    Template Registry
+                </button>
+                <button class="nav-link" data-tab="history">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    History Archive
+                </button>
+            </nav>
+            <div class="sidebar-footer">
+                <p><span class="status-dot green"></span> Live / Postgres Connected</p>
+            </div>
+        </aside>
 
+        <!-- ZONE DU DESIGN PRINCIPAL RECENTRÉ ET BRIDÉ -->
         <main class="main-content">
-            <!-- Panneau de Configuration -->
-            <section class="config-section card">
-                <h2>⚙️ Extraction Settings</h2>
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label for="doc-type">Document Scale Type</label>
-                        <select id="doc-type">
-                            <option value="auto">Auto-detect (Let AI analyze)</option>
-                            <option value="single">Single Research Paper</option>
-                            <option value="proceeding">Conference Proceeding</option>
-                        </select>
+            <div class="content-container">
+                
+                <!-- PANNEAU 1 : EXTRACTION AGENTIQUE -->
+                <section class="tab-pane active" id="tab-extraction">
+                    <div class="panel-header">
+                        <h1>Extraction portail</h1>
+                        <p>Trigger semantic scholarly comparative extraction tasks orchestrated by AI Agentic system</p>
                     </div>
-                    <div class="form-group">
-                        <label for="domain-type">Scientific Domain Template</label>
-                        <select id="domain-type">
-                            <option value="default">General Academic (Default)</option>
-                            <option value="infectious-disease">Infectious Disease</option>
-                            <option value="nutritional-metabolic">Nutritional & Metabolic Diseases</option>
-                        </select>
+
+                    <div class="config-grid">
+                        <!-- Paramètres de soumission -->
+                        <div class="card config-card">
+                            <h3 class="card-title">Process Ingestion Parameters</h3>
+                            <div class="form-group">
+                                <label for="doc-type">Document Scale Type</label>
+                                <select id="doc-type">
+                                    <option value="single">Single Research Paper</option>
+                                    <option value="proceeding">Conference Proceeding</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Target Academic Template</label>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <select id="domain-type" style="flex-grow: 1;"></select>
+                                    <button class="btn btn-secondary" id="btn-inspect-template" style="width: auto; padding: 0 0.75rem;" title="Inspect Template Structure">👁️</button>
+                                </div>
+                            </div>
+                            <div class="dropzone" id="pdf-dropzone">
+                                <input type="file" id="file-input" accept="application/pdf" style="display: none;">
+                                <div class="dropzone-content">
+                                    <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                    <p class="text">Drag and drop academic PDF, or <span class="highlight">browse files</span></p>
+                                    <p class="file-name" id="selected-file-name"></p>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary" id="btn-start" style="width: 100%;" disabled>🚀 Start Agentic Extraction</button>
+                        </div>
+
+                        <!-- Live Agentic Monitor -->
+                        <div class="card agentic-flow-card">
+                            <h3 class="card-title">Live Multi-Agent execution pipeline</h3>
+                            
+                            <div class="flow-timeline">
+                                <div class="flow-step" id="node-classifier">
+                                    <div class="step-indicator"><div class="step-dot"></div></div>
+                                    <div class="step-details">
+                                        <h4>Classifier Agent</h4>
+                                        <p>Determines document scale boundaries (Single vs Proceedings).</p>
+                                    </div>
+                                </div>
+                                <div class="flow-step" id="node-segmenter">
+                                    <div class="step-indicator"><div class="step-dot"></div></div>
+                                    <div class="step-details">
+                                        <h4>Segmenter & Clusterer Agent</h4>
+                                        <p>Chops proceedings into papers and groups them by problem.</p>
+                                    </div>
+                                </div>
+                                <div class="flow-step" id="node-detector">
+                                    <div class="step-indicator"><div class="step-dot"></div></div>
+                                    <div class="step-details">
+                                        <h4>Domain Detector Agent</h4>
+                                        <p>Matches schema criteria against persistent PostgreSQL store.</p>
+                                    </div>
+                                </div>
+                                <div class="flow-step" id="node-extractor">
+                                    <div class="step-indicator"><div class="step-dot"></div></div>
+                                    <div class="step-details">
+                                        <h4>Academic Feature Extractor</h4>
+                                        <p>Jointly parses study contributions and baseline metrics.</p>
+                                    </div>
+                                </div>
+                                <div class="flow-step" id="node-synthesizer">
+                                    <div class="step-indicator"><div class="step-dot"></div></div>
+                                    <div class="step-details">
+                                        <h4>Table Synthesizer Agent</h4>
+                                        <p>Performs metric aligning and persists structured rows to DB.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                </div>
 
-                <!-- Dropzone de dépôt du fichier -->
-                <div class="dropzone" id="pdf-dropzone">
-                    <input type="file" id="file-input" accept="application/pdf" style="display: none;">
-                    <div class="dropzone-content">
-                        <span class="icon">📁</span>
-                        <p class="text">Drag and drop your scientific PDF here, or <span class="highlight">browse files</span></p>
-                        <p class="file-name" id="selected-file-name"></p>
+                    <!-- RECOMMANDATION D'IA AUTOMATIQUE (Masquée par défaut) -->
+                    <div class="card recommendation-card hidden" id="recommendation-card" style="margin-top: 2rem;">
+                        <h3 class="card-title" style="color: var(--accent-color);">💡 AI Template Recommendation</h3>
+                        <p class="recommendation-text" id="recommendation-text"></p>
+                        <div class="recommendation-actions" id="recommendation-actions" style="display: flex; gap: 1rem; margin-top: 1rem;"></div>
                     </div>
-                </div>
 
-                <button class="btn btn-primary" id="btn-start" disabled>🚀 Start Extraction Task</button>
-            </section>
+                    <!-- Nœud Human-in-the-loop (Masqué par défaut) -->
+                    <div class="validation-section card hidden" id="schema-card" style="margin-top: 2.5rem;">
+                        <h3 class="card-title" style="color: var(--accent-color);">🛠️ Schema Verification Checkpoint</h3>
+                        <p class="subtitle" style="margin-bottom: 1.5rem;">An unregistered domain was detected. Please approve, modify, or extend the comparative metrics suggested by the AI proposer.</p>
+                        
+                        <div class="form-group" style="margin-bottom: 2rem; max-width: 500px;">
+                            <label for="domain-display-name">Scientific Domain Name</label>
+                            <input type="text" id="domain-display-name" class="styled-input" placeholder="e.g. Molecular Medicine">
+                        </div>
 
-            <!-- Statut de la Tâche de fond (Celery) -->
-            <section class="status-section card hidden" id="status-card">
-                <h2>🔄 Task Progress</h2>
-                <div class="status-container">
-                    <div class="progress-bar-container">
-                        <div class="progress-bar" id="progress-bar"></div>
+                        <div class="schema-builder-wrapper">
+                            <div class="properties-header-grid">
+                                <div>Property Name</div>
+                                <div>Data Type</div>
+                                <div>Description & Rules Guidelines</div>
+                                <div>Action</div>
+                            </div>
+                            <div id="properties-list"></div>
+                            <button class="btn btn-secondary" id="btn-add-property" style="width: auto;">➕ Add Custom Property</button>
+                        </div>
+                        
+                        <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+                            <button class="btn btn-primary" id="btn-submit-schema" style="flex-grow: 1; width: auto;">🚀 Approve Schema & Resume Process</button>
+                            <button class="btn btn-danger" id="btn-decline-schema" style="width: auto;">❌ Decline & Cancel Task</button>
+                        </div>
                     </div>
-                    <p class="status-message" id="status-message">Initializing task...</p>
-                    <p class="task-id">Task ID: <span id="display-task-id"></span></p>
-                </div>
-            </section>
 
-            <!-- Zone d'affichage des Résultats -->
-            <section class="results-section card hidden" id="results-card">
-                <div class="results-header">
-                    <h2 id="table-title">📋 Extracted Comparative Matrix</h2>
-                    <button class="btn btn-success" id="btn-download-csv">📥 Download CSV</button>
-                </div>
-                <div class="table-wrapper">
-                    <table class="data-table" id="results-table">
-                        <thead>
-                            <tr id="table-headers"></tr>
-                        </thead>
-                        <tbody id="table-body"></tbody>
-                    </table>
-                </div>
-            </section>
+                    <!-- ZONE D'AFFICHAGE DU TABLEAU DE COMPARAISON -->
+                    <div class="results-section card hidden" id="results-card" style="margin-top: 2.5rem;">
+                        <div class="results-header">
+                            <h2 id="table-title">Consolidated Results Table</h2>
+                            <button class="btn btn-success" id="btn-download-csv">
+                                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                Download CSV Matrix
+                            </button>
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="data-table" id="results-table">
+                                <thead><tr id="table-headers"></tr></thead>
+                                <tbody id="table-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- PANNEAU 2 : FILE D'ATTENTE DE VALIDATION (HITL QUEUE) -->
+                <section class="tab-pane" id="tab-hitl">
+                    <div class="panel-header">
+                        <h1>Validation Queue</h1>
+                        <p>Interact with halted pipeline execution threads requiring metadata schema approvals.</p>
+                    </div>
+                    <div class="card">
+                        <div id="hitl-queue-container" class="queue-list"></div>
+                    </div>
+                </section>
+
+                <!-- PANNEAU 3 : REGISTRE DE TEMPLATES -->
+                <section class="tab-pane" id="tab-templates">
+                    <div class="panel-header">
+                        <h1>Template Registry</h1>
+                        <p>Browse verified schemas and technical metadata properties configured for extraction.</p>
+                    </div>
+                    <div class="templates-grid" id="templates-grid-container"></div>
+                </section>
+
+                <!-- PANNEAU 4 : HISTORIQUE DES EXTRACTIONS -->
+                <section class="tab-pane" id="tab-history">
+                    <div class="panel-header">
+                        <h1>Extraction Archive</h1>
+                        <p>Inspect, view, and download previous comparison matrices stored in database tables.</p>
+                    </div>
+                    <div class="card" style="padding:0;">
+                        <div class="table-wrapper" style="border:none;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Created At</th>
+                                        <th>Research Problem / Study Focus</th>
+                                        <th>Domain Template</th>
+                                        <th>Rows Count</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="history-table-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+            </div>
         </main>
     </div>
+
+    <!-- ======================================================================= -->
+    <!-- ⚠️ CORRECTIF D'ARCHITECTURE FRONTEND : MODALES DE NIVEAU RACINE (ROOT) -->
+    <!-- Ces fenêtres s'affichent par-dessus n'importe quel onglet actif [3] -->
+    <!-- ======================================================================= -->
+
+    <!-- A. MODALE D'INSPECTION DE TEMPLATES -->
+    <div class="modal hidden" id="template-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-template-title">📋 Template Structure</h3>
+                <button class="modal-close" id="btn-close-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Property</th>
+                            <th>Type</th>
+                            <th>Description / Guidelines</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modal-properties-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- B. MODALE D'AFFICHAGE DE L'HISTORIQUE DE COMPARAISON -->
+    <div class="modal hidden" id="history-modal">
+        <div class="modal-content" style="max-width: 1100px; width: 95%;">
+            <div class="modal-header">
+                <h3 id="modal-history-title">📊 Historical Comparison Table</h3>
+                <button class="modal-close" id="btn-close-history-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="results-header" style="border: none; padding-bottom: 0; margin-bottom: 1rem;">
+                    <button class="btn btn-success" id="btn-download-history-csv" style="width: auto;">
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        Download CSV
+                    </button>
+                </div>
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead><tr id="modal-history-headers"></tr></thead>
+                        <tbody id="modal-history-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>

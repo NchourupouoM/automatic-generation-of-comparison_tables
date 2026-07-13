@@ -1,49 +1,103 @@
-# app/services/tasks.py
+# app/services/tasks.py (Version Finale de Production)
 import logging
+import uuid
 from celery import Task
 from app.core.celery_app import celery_app
-from app.services.orchestrator import orchestrator_graph
+from app.core.database import SessionLocal
+from app.core.models import ValidationTaskModel
+# IMPORTATION DE LA FONCTION LAZY-LOADED [3]
+from app.services.orchestrator import get_orchestrator_graph, PaperTask
 
 logger = logging.getLogger(__name__)
 
 
-class ExtractionTask(Task):
-    """
-    Custom task class to log lifecycle events of the extraction pipeline.
-    """
+class BaseExtractionTask(Task):
     def on_failure(self, exc, task_id, args, kwargs, einfo):
-        logger.error(f"Task {task_id} failed. Arguments: {args}. Error: {str(exc)}")
+        logger.error(f"Task {task_id} failed. Error: {str(exc)}")
         super().on_failure(exc, task_id, args, kwargs, einfo)
 
 
-# app/services/tasks.py (Mise à jour ciblée)
-
-@celery_app.task(bind=True, name="app.services.tasks.run_extraction")
+@celery_app.task(bind=True, base=BaseExtractionTask, name="app.services.tasks.run_extraction")
 def run_extraction_task(
     self, 
-    raw_markdown: str,  # Devient directement la chaîne Markdown
+    raw_markdown: str, 
     manual_document_type: str = "auto", 
-    domain: str = "default"
+    domain: str = "default",
+    extraction_tasks: list = []
 ) -> dict:
-    self.update_state(
-        state="PROCESSING", 
-        meta={"progress_status": f"Initializing execution for domain: '{domain}'"}
-    )
+    """
+    Asynchronous task executing the LangGraph agentic pipeline.
+    """
+    logger.info(f"Task {self.request.id} started. Domain: '{domain}'. Chunks count: {len(extraction_tasks)}")
     
-    try:
-        # Initialisation de l'état du graphe avec le Markdown déjà présent
-        state_input = {
-            "raw_markdown": raw_markdown,  # Injecté directement
-            "manual_document_type": manual_document_type,
-            "document_type": "single",
-            "domain": domain,
-            "extraction_tasks": [],
-            "extracted_rows": [],
-            "consolidated_result": {}
+    tasks = [PaperTask(**t) for t in extraction_tasks] if extraction_tasks else []
+    
+    state_input = {
+        "raw_markdown": raw_markdown,
+        "manual_document_type": manual_document_type,
+        "document_type": "proceeding" if manual_document_type == "proceeding" else "single",
+        "domain": domain,
+        "celery_task_id": str(self.request.id),
+        "extraction_tasks": tasks,
+        "extracted_rows": [],
+        "proposed_properties": [],
+        "validated_schema_json": {},
+        "consolidated_result": {}
+    }
+    
+    config = {
+        "configurable": {
+            "thread_id": str(self.request.id)
         }
+    }
+    
+    # RÉSOLUTION : Récupération dynamique du graphe compilé dans le worker actif [3]
+    orchestrator_graph = get_orchestrator_graph()
+    
+    final_state = orchestrator_graph.invoke(state_input, config)
+    return final_state["consolidated_result"]
+
+
+@celery_app.task(bind=True, base=BaseExtractionTask, name="app.services.tasks.run_schema_proposal")
+def run_schema_proposal_task(self, task_uuid_str: str, raw_markdown: str, domain: str) -> dict:
+    """
+    Executes the Template Proposer Agent to generate Suggested Properties for the User UI.
+    """
+    logger.info(f"Task {self.request.id} formulating schema proposals for domain: '{domain}'")
+    
+    state_input = {
+        "raw_markdown": raw_markdown,
+        "manual_document_type": "single",
+        "document_type": "single",
+        "domain": domain,
+        "celery_task_id": task_uuid_str,
+        "extraction_tasks": [],
+        "extracted_rows": [],
+        "proposed_properties": [],
+        "validated_schema_json": {},
+        "consolidated_result": {}
+    }
+    
+    config = {
+        "configurable": {
+            "thread_id": str(task_uuid_str)
+        }
+    }
+    
+    # RÉSOLUTION : Récupération dynamique du graphe [3]
+    orchestrator_graph = get_orchestrator_graph()
+    
+    final_state = orchestrator_graph.invoke(state_input, config)
+    
+    with SessionLocal() as db:
+        task_record = db.query(ValidationTaskModel).filter(
+            ValidationTaskModel.task_id == uuid.UUID(task_uuid_str)
+        ).first()
         
-        final_state = orchestrator_graph.invoke(state_input)
-        return final_state["consolidated_result"]
-        
-    except Exception as e:
-        raise e
+        if task_record:
+            task_record.proposed_properties = final_state.get("proposed_properties", [])
+            task_record.status = "PENDING_SCHEMA_VALIDATION"
+            db.commit()
+            
+    logger.info(f"Successfully saved AI suggested properties for task {task_uuid_str}")
+    return {"proposed_properties": final_state.get("proposed_properties", [])}

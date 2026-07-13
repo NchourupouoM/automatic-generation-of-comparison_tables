@@ -16,3 +16,6 @@ langgraph
 python-multipart
 pandas
 streamlit
+sqlalchemy
+psycopg2-binary
+psycopg_pool
