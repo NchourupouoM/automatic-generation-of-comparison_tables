@@ -48,6 +48,7 @@ jobs:
           --platform managed \
           --allow-unauthenticated \
           --port 8000
+          --memory=2Gi \
 
     - name: Deploy Celery Worker to Cloud Run
       run: |
@@ -58,6 +59,7 @@ jobs:
           --no-cpu-throttling \
           --port=8080 \
           --command=sh \
+          --memory=2Gi \
           --args="-c,python3 -m http.server 8080 & celery -A app.core.celery_app:celery_app worker --loglevel=info -P solo"
   notify:
     name: Send Commit Notification
