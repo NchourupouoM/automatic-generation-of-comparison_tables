@@ -47,7 +47,7 @@ jobs:
           --region ${{ env.GCP_REGION }} \
           --platform managed \
           --allow-unauthenticated \
-          --port 8000
+          --port 8000 \
           --memory=2Gi \
 
     - name: Deploy Celery Worker to Cloud Run
