@@ -1,4 +1,3 @@
-# app/api/endpoints.py (Version Finale d'Élite)
 import json
 import shutil
 import tempfile

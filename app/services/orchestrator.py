@@ -1,15 +1,13 @@
-# app/services/orchestrator.py (Version Finale d'Élite)
 import logging
-import uuid  # <-- AJOUT IMPORTATION GLOBALE
+import uuid
 from pathlib import Path
 from typing import Dict, List, Any, Literal, Optional
 from typing_extensions import TypedDict
-from psycopg.rows import dict_row
 
 from langgraph.graph import StateGraph, END
-# IMPORTATION DU PERSISTEUR POSTGRES DE LANGGRAPH
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
+from psycopg.rows import dict_row
 
 from pydantic import BaseModel, Field
 import json
@@ -96,6 +94,7 @@ class RecommendationResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 def classify_document_node(state: GraphState) -> Dict[str, Any]:
+    """Agent: Classifies whether the document is single or proceeding."""
     manual_type = state.get("manual_document_type", "auto")
     if manual_type in ["single", "proceeding"]:
         return {"document_type": manual_type}
@@ -114,6 +113,7 @@ def classify_document_node(state: GraphState) -> Dict[str, Any]:
 
 
 def segmenter_and_clusterer_node(state: GraphState) -> Dict[str, Any]:
+    """Agent: Splits proceedings into chunks."""
     logger.info("Agent: segmenter_and_clusterer_node running.")
     _, instructions = SkillLoader.load_skill(Path("skills/structuralclustering"))
     
@@ -141,38 +141,28 @@ def domain_detector_node(state: GraphState) -> Dict[str, Any]:
     """
     Agent: Domain Detector.
     Queries PostgreSQL template registry. If the schema is missing OR is 'default',
-    system forces a dynamic schema validation flow to guarantee structured output.
+    system forces a dynamic schema validation flow.
     """
-    # 1. Récupération du domaine actuel de l'état
     target_domain = state.get("domain", "default")
     
-    # 2. Si le domaine est "default" et que nous avons des fragments de proceedings,
-    # nous extrayons le véritable domaine sémantique cible depuis le premier fragment (chunk)
     if target_domain == "default" and state.get("extraction_tasks"):
         detected_domain = state["extraction_tasks"][0].domain_hint or "default"
         target_domain = detected_domain.lower().replace(" ", "-")
-        # Nettoyage des caractères non-alphanumériques pour obtenir une clé saine
         target_domain = re.sub(r'[^a-z0-9\-]', '', target_domain)
 
     logger.info(f"Agent: Detecting schema validation registry for domain: '{target_domain}'")
     
-    # 3. Vérification de la présence du domaine dans le registre PostgreSQL
     with SessionLocal() as db:
         template_record = db.query(TemplateModel).filter(TemplateModel.id == target_domain).first()
         
-        # Si le gabarit existe ET n'est pas "default" -> On peut extraire directement
+        # S'il y a un template en base ET que le domaine n'est pas "default" -> Direct Extraction
         if template_record and target_domain != "default":
             logger.info(f"Domain '{target_domain}' detected in database registry. Proceeding to extraction.")
             tasks = state.get("extraction_tasks", [])
             if not tasks:
                 tasks = [PaperTask(title="Proposed Study", text_segment=state["raw_markdown"])]
-                
             return {"domain": target_domain, "extraction_tasks": tasks}
         else:
-            # CORRECTIF CRITIQUE : Si absent ou égal à "default", nous redirigeons vers le Proposer
-            # MAIS nous conservons 'target_domain' (le domaine réel extrait) dans l'état !
-            # Cela garantit que le Proposer génère des suggestions et enregistre la tâche de validation
-            # sous la véritable clé sémantique (ex: 'benchmarking-retrieval...') au lieu de 'default' [3].
             logger.warning(f"Domain '{target_domain}' requires dynamic schema proposal. Redirecting to Proposer.")
             return {"domain": target_domain, "extraction_tasks": []}
 
@@ -259,13 +249,23 @@ def template_validator_node(state: GraphState) -> Dict[str, Any]:
 def academic_features_extraction_node(state: GraphState) -> Dict[str, Any]:
     """
     Agent: Academic Features Extraction.
-    Implements a Deep Agent Self-Correction Loop / Validation Gate.
+    Resolves the Skill instructions and dynamic validation schemas.
     """
     target_domain = state.get("domain", "default")
     logger.info(f"Agent: Academic Features Extractor running for domain '{target_domain}'")
     
-    _, instructions = SkillLoader.load_skill(Path("skills/academicextraction"))
+    # ---------------------------------------------------------------------------
+    # CORRECTIF : Résolution dynamique du chemin du Skill sémantique [3]
+    # ---------------------------------------------------------------------------
+    skill_dir = Path(f"skills/{target_domain}")
+    if not skill_dir.exists():
+        # Fallback de sécurité vers la compétence générique d'extraction si non-référencée
+        logger.info(f"Skill directory 'skills/{target_domain}' not found. Falling back to 'academicextraction'.")
+        skill_dir = Path("skills/academicextraction")
+        
+    _, instructions = SkillLoader.load_skill(skill_dir)
     
+    # 2. Résolution du modèle de validation
     if target_domain == "default":
         target_schema = ComparisonTable
     else:
@@ -277,15 +277,14 @@ def academic_features_extraction_node(state: GraphState) -> Dict[str, Any]:
     
     rows = []
     
+    # 3. Traitement de chaque segment de document
     for task in state["extraction_tasks"]:
         prompt = ACADEMIC_EXTRACTION_PROMPT.format(
             instructions=instructions,
             paper_content=task.text_segment
         )
         
-        # ---------------------------------------------------------------------------
-        # BOUCLE D'AUTO-CORRECTION SÉMANTIQUE DE DEEP AGENT (Quality Gate)
-        # ---------------------------------------------------------------------------
+        # Boucle d'auto-correction sémantique de Deep Agent (Quality Gate)
         max_attempts = 3
         extracted_table = None
         
@@ -294,7 +293,6 @@ def academic_features_extraction_node(state: GraphState) -> Dict[str, Any]:
                 logger.info(f" -> Extraction attempt {attempt}/{max_attempts} for paper '{task.title}'")
                 extracted_table = structured_llm.invoke(prompt)
                 
-                # CORRECTION : Utilisation de l'index 'index > 0' pour désigner les baselines
                 for index, row in enumerate(extracted_table.rows):
                     if index > 0 and len(row.authors) > 0 and set(row.authors) == set(task.authors):
                         raise ValueError(
@@ -475,27 +473,27 @@ def build_orchestrator_graph() -> StateGraph:
 _orchestrator_graph = None
 
 def get_orchestrator_graph():
-    """
-    Compiles the LangGraph StateMachine with an active PostgresSaver connection pool
-    ONLY inside the active worker process turn, avoiding Celery multi-process SSL decryption errors [3].
-    """
     global _orchestrator_graph
     if _orchestrator_graph is None:
         logger.info("Compiling LangGraph StateMachine with dynamic PostgresSaver connection pool...")
         
-        # Le pool est créé et ouvert spécifiquement au sein du worker actif
         connection_pool = ConnectionPool(
             conninfo=settings.DATABASE_URL,
             max_size=5,
             min_size=1,
-            kwargs={"autocommit": True, "row_factory": dict_row}
+            kwargs={
+                "autocommit": True,
+                "row_factory": dict_row
+            }
         )
         
         checkpointer = PostgresSaver(connection_pool)
-        checkpointer.setup() # Crée automatiquement la table de checkpoints si manquante [3]
+        checkpointer.setup()
         
         _orchestrator_graph = build_orchestrator_graph().compile(
             checkpointer=checkpointer,
             interrupt_before=["template_validator"]
         )
     return _orchestrator_graph
+
+orchestrator_graph = build_orchestrator_graph()

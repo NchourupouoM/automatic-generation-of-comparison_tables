@@ -1,4 +1,3 @@
-# app/services/tasks.py (Version Finale de Production)
 import logging
 import uuid
 from celery import Task
