@@ -21,6 +21,10 @@ from app.core.dynamic_loader import compile_dynamic_table_model, save_new_templa
 from app.core.schemas import ComparisonTable
 from app.core.skills_loader import SkillLoader
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Importation des prompts isolés
 from app.core.prompts import (
     CLASSIFIER_PROMPT,
@@ -197,16 +201,83 @@ def recommend_template_for_paper(sample_text: str) -> dict:
 
 
 def template_proposer_node(state: GraphState) -> Dict[str, Any]:
-    target_domain = state.get("domain", "custom_domain")
-    logger.info(f"Agent: Formulating suggested properties for domain '{target_domain}'")
-    
+    """
+    Agent: Template Proposer (Two-Step Semantic Inference).
+    1. If domain is 'default', infers the precise scientific domain from the abstract.
+    2. Suggests comparative properties tailored to this inferred domain,
+       using PostgreSQL active schemas as Few-Shot formatting examples [3].
+    """
+    target_domain = state.get("domain", "default")
     llm = LLMFactory.get_llm()
+    
+    # ---------------------------------------------------------------------------
+    # ÉTAPE A : INFÉRENCE SÉMANTIQUE DE DOMAINE HORS-"DEFAULT" [3]
+    # ---------------------------------------------------------------------------
+    if target_domain == "default" or target_domain == "custom_domain":
+        logger.info("Agent: 'default' domain detected. Inferring precise scientific domain from text...")
+        
+        domain_inference_prompt = """
+        ROLE: You are an expert scientific taxonomist.
+        TASK: Analyze the following scientific abstract and extract its precise, granular clinical or scientific domain.
+        
+        CONSTRAINTS:
+        - Return ONLY a short, clean title (3 to 6 words maximum) for this domain (e.g., "Malaria-Induced Bone Loss" or "Colorectal Cancer Dietetics").
+        - Do not add any conversational text, explanations, markdown, or punctuation.
+        
+        Text Abstract:
+        {abstract}
+        
+        INFERRED DOMAIN:
+        """
+        try:
+            inferred_response = llm.invoke(
+                domain_inference_prompt.format(abstract=state["raw_markdown"][:4000])
+            )
+            # Nettoyage de sécurité des guillemets
+            inferred_domain = inferred_response.content.strip().replace('"', '').replace("'", "")
+            target_domain = inferred_domain
+            logger.info(f"Agent: Inferred precise domain name for this paper: '{target_domain}'")
+        except Exception as e:
+            logger.warning(f"Domain inference failed. Falling back to: {target_domain}. Error: {str(e)}")
+
+    # ---------------------------------------------------------------------------
+    # ÉTAPE B : CONCEPTION DU SCHÉMA FEW-SHOT ORIENTÉ SUR LE DOMAINE INfÉRÉ [3]
+    # ---------------------------------------------------------------------------
+    logger.info(f"Agent: Formulating suggested properties for inferred domain: '{target_domain}'")
+    few_shot_examples_str = "No existing schemas in database."
+    
+    with SessionLocal() as db:
+        templates = db.query(TemplateModel).all()
+        if templates:
+            examples_list = []
+            for t in templates:
+                examples_list.append({
+                    "domain_name": t.name,
+                    "properties": [
+                        {
+                            "name": p["name"],
+                            "type": p["type"],
+                            "description": p["description"]
+                        } for p in t.schema_json.get("fields", [])
+                    ]
+                })
+            few_shot_examples_str = json.dumps(examples_list, indent=2)
+
     structured_llm = llm.with_structured_output(ProposedPropertiesList, method="function_calling")
-    prompt = PROPOSE_PROPERTIES_PROMPT.format(domain_name=target_domain)
+    
+    # Injection du domaine d'étude extrait du papier et de l'apprentissage Few-Shot [3]
+    prompt = PROPOSE_PROPERTIES_PROMPT.format(
+        domain_name=target_domain,
+        few_shot_examples=few_shot_examples_str
+    )
     
     try:
         suggestions = structured_llm.invoke(prompt)
         properties = [prop.model_dump() for prop in suggestions.properties]
+        
+        # Formatage de l'identifiant machine svelte pour l'ID de la tâche de validation (ex: Malaria-Induced Bone Loss -> malaria-induced-bone-loss) [3]
+        machine_domain_key = target_domain.lower().replace("_", " ").replace(" ", "-")
+        machine_domain_key = re.sub(r'[^a-z0-9\-]', '', machine_domain_key)
         
         celery_id = state.get("celery_task_id")
         if celery_id:
@@ -220,18 +291,17 @@ def template_proposer_node(state: GraphState) -> Dict[str, Any]:
                         status="PENDING_SCHEMA_VALIDATION",
                         proposed_properties=properties,
                         raw_markdown=state["raw_markdown"],
-                        domain=target_domain,
+                        domain=machine_domain_key,  # Sauvegarde sous la véritable clé sémantique [3]
                         document_type=state.get("document_type", "single")
                     )
                     db.add(new_task)
                     db.commit()
                     logger.info(f"Successfully registered active HITL interrupt in PostgreSQL: {celery_id}")
                     
-        return {"proposed_properties": properties}
+        return {"domain": machine_domain_key, "proposed_properties": properties}
     except Exception as e:
         logger.error(f"Failed to propose properties: {str(e)}")
-        return {"proposed_properties": []}
-
+        return {"proposed_properties": []}    
 
 def template_validator_node(state: GraphState) -> Dict[str, Any]:
     logger.info("Agent: Human checkpoint validated. Resuming pipeline execution.")

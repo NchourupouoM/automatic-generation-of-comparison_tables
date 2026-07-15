@@ -51,89 +51,45 @@ or
 # 2. Prompt de Recommandation et Découverte de Templates (Schema Router)
 # ---------------------------------------------------------------------------
 RECOMMEND_TEMPLATE_PROMPT = """
-<role>
-You are an expert scientific ontologist and domain coordinator.
-</role>
+ROLE: You are an expert scientific ontologist and domain coordinator for ORKG.
+TASK: Analyze the research paper abstract and decide whether it matches an existing metadata schema, or if we must generate a new specialized schema.
 
-<task>
-Decide whether this paper's abstract matches an existing metadata schema, or
-whether a new specialized schema must be generated for its domain.
-</task>
-
-<existing_schemas>
+EXISTING SCHEMAS:
 {existing_schemas_list}
-</existing_schemas>
 
-<matching_rule>
-A schema counts as a match only if it targets the same specific sub-domain
-and evaluation focus as the abstract — not merely the same broad field.
-"Object detection" and "instance segmentation" both sit under "Computer
-Vision" but are not a match for each other, because their comparative
-metrics differ (mAP/IoU vs. panoptic quality). When unsure, prefer creating
-a new schema over forcing a loose fit — a schema with the wrong metrics is
-worse than one extra schema.
-</matching_rule>
+<instructions>
+1. Carefully read the paper Abstract.
+2. Compare the research domain of the abstract with the existing schemas.
+3. If an existing schema is an exact match (same scientific domain and focus), select it (decision: "match").
+4. If no existing schema is a clean match, recommend creating a new template (decision: "new"). 
+   - Propose a clean lowercase machine key (e.g., "colorectal-cancer-dietetics") and a friendly display name.
+   - Propose 5 to 7 comparative properties SPECIFICALLY tailored to extract clinical/metabolic/dietary metrics from this specific abstract.
+5. Strictly adhere to the output JSON Schema.
+</instructions>
 
-<thinking>
-Identify the abstract's specific research problem and its likely evaluation
-metrics first. Only then compare against each existing schema's stated
-scope. Keep this reasoning private.
-</thinking>
-
-<output_format>
-Return only this JSON object, no Markdown fences, no extra text:
-
-{{
-  "action": "use_existing" | "create_new",
-  "schema_id": "string | null",       // set when action == use_existing, else null
-  "domain_name": "string | null",     // set when action == create_new, else null
-  "rationale": "one sentence, no more"
-}}
-</output_format>
-
-<paper_abstract>
+PAPER ABSTRACT:
+---
 {abstract_text}
-</paper_abstract>
+---
 """
 
 # ---------------------------------------------------------------------------
-# 3. Prompt de Proposition de Propriétés (Template Proposer)
+# 3. Prompt de Proposition de Propriétés (Template Proposer avec Few-Shot) [3]
 # ---------------------------------------------------------------------------
 PROPOSE_PROPERTIES_PROMPT = """
-<role>
-You are an elite academic taxonomist.
-</role>
+ROLE: You are an elite academic taxonomist.
+TASK: Recommend a highly specific comparative schema (5 to 7 properties) for scientific publications targeting the domain: '{domain_name}' [3].
 
-<task>
-Propose a comparative metadata schema for scientific publications in the
-domain: '{domain_name}'.
-</task>
+FEW-SHOT EXAMPLES (Existing active templates loaded dynamically from our PostgreSQL registry) [3]:
+=======================================================
+{few_shot_examples}
+=======================================================
 
-<constraints>
-- Exactly 5 to 7 properties — no more, no fewer.
-- `name`: short, lowercase, snake_case (e.g. "detection_latency", "dataset_size").
-- `description`: tells an extraction agent precisely what to look for and how
-  to format the value (units, expected type, where in the paper it usually appears).
-- Prefer metrics that are commonly reported across most papers in this
-  domain over ones specific to a single method, so the schema stays
-  comparable across many papers later.
-</constraints>
-
-<example>
-Domain: "Acoustic Echo Cancellation"
-Properties:
-- name: "erle_db", description: "Echo Return Loss Enhancement (ERLE), reported in decibels (dB)."
-- name: "real_time_factor", description: "Real-time factor or processing-speed metric reported, as a unitless ratio."
-</example>
-
-<output_format>
-Return only this JSON array, no Markdown fences, no extra text:
-
-[
-  {{ "name": "snake_case_property", "description": "what to look for and how to format it" }},
-  ...
-]
-</output_format>
+INSTRUCTIONS & CONSTRAINTS:
+- Generate exactly 5 to 7 comparative properties (metrics, features, or outcomes) relevant to the target domain: '{domain_name}' [3].
+- Property names must be short, lowercase, and formatted strictly in snake_case (e.g., 'efficacy_rate', 'host_type').
+- Adhere strictly to the design patterns, nomenclature, and descriptive depth shown in the few-shot examples above [3].
+- Descriptions must clearly instruct an extraction agent on what to look for and how to format the value [3].
 """
 
 # ---------------------------------------------------------------------------

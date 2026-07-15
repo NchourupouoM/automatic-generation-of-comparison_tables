@@ -881,7 +881,7 @@ fileInput.addEventListener("change", async (e) => {
                             const taskData = await taskRes.json();
                             
                             // CORRECTION : Transmettre le véritable ID de tâche (data.task_id) à la recommandation
-                            triggerAIRecommendation(taskData.raw_markdown || taskData.detail || "Academic Abstract Analysis", data.task_id);
+                            triggerAIRecommendation(taskData.raw_markdown || "Academic Abstract Analysis", data.task_id);
                         }
                     }
                 }, 1000);

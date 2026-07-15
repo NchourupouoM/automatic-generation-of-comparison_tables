@@ -207,6 +207,7 @@ async def get_task_status(task_id: str):
                     "status": "PENDING_SCHEMA_VALIDATION",
                     "proposed_properties": proposed,
                     "domain": task_record.domain,  # Retourne le véritable domaine extrait sémantiquement [3]
+                    "raw_markdown": task_record.raw_markdown,
                     "detail": "AI has generated schema proposals. Waiting for human verification."
                 }
             elif status_in_db == "PENDING_SCHEMA_PROPOSAL":

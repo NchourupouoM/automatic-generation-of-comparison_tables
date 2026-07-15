@@ -5,6 +5,9 @@ from app.api.endpoints import router as api_router
 from app.core.database import engine, Base
 import app.core.models
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
