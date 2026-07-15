@@ -551,6 +551,7 @@ def get_orchestrator_graph():
             conninfo=settings.DATABASE_URL,
             max_size=5,
             min_size=1,
+            timeout=10.0,
             kwargs={
                 "autocommit": True,
                 "row_factory": dict_row

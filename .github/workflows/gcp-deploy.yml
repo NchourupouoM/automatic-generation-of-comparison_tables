@@ -57,6 +57,7 @@ jobs:
           --region ${{ env.GCP_REGION }} \
           --platform managed \
           --no-cpu-throttling \
+          --min-instances=1 \
           --port=8080 \
           --command=sh \
           --memory=2Gi \
