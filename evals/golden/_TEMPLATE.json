@@ -1,0 +1,24 @@
+{
+  "domain": "your-domain-machine-key",
+  "research_problem": "One-sentence statement of the shared problem the table compares approaches on.",
+  "rows": [
+    {
+      "paper_title": "Exact title of THIS paper",
+      "authors": ["First Author", "Second Author"],
+      "is_proposed_method": true,
+      "properties": {
+        "example_metric": "value as reported in the paper",
+        "dataset": "name of dataset/benchmark used"
+      }
+    },
+    {
+      "paper_title": "Title of a baseline this paper compares against",
+      "authors": [],
+      "is_proposed_method": false,
+      "properties": {
+        "example_metric": "baseline's reported value",
+        "dataset": "N/A"
+      }
+    }
+  ]
+}

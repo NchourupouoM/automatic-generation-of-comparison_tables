@@ -1,5 +1,6 @@
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Any, Literal, Optional
 from typing_extensions import TypedDict
@@ -11,15 +12,15 @@ from psycopg.rows import dict_row
 
 from pydantic import BaseModel, Field
 import json
-import re
 
 from app.core.config import settings
 from app.core.llm_factory import LLMFactory
 from app.core.database import SessionLocal
 from app.core.models import TemplateModel, ValidationTaskModel, ComparisonTableModel, ExtractedRowModel
-from app.core.dynamic_loader import compile_dynamic_table_model, save_new_template_to_db
+from app.core.dynamic_loader import compile_dynamic_table_model
 from app.core.schemas import ComparisonTable
 from app.core.skills_loader import SkillLoader
+from app.core.utils import slugify_domain
 
 from dotenv import load_dotenv
 
@@ -116,26 +117,60 @@ def classify_document_node(state: GraphState) -> Dict[str, Any]:
         return {"document_type": "single"}
 
 
+def _locate_segment_boundaries(raw_markdown: str, titles: List[str]) -> List[int]:
+    """
+    Finds the character offset of each paper title inside the full proceeding
+    markdown (case-insensitive). Returns one offset per title; titles that
+    cannot be located inherit the previous boundary so slicing stays monotonic.
+    """
+    lowered = raw_markdown.lower()
+    offsets: List[int] = []
+    search_from = 0
+    for title in titles:
+        needle = (title or "").strip().lower()
+        pos = lowered.find(needle, search_from) if needle else -1
+        if pos == -1 and len(needle) > 40:
+            # Retry on a title prefix: PDF-to-markdown often breaks long titles.
+            pos = lowered.find(needle[:40], search_from)
+        if pos == -1:
+            pos = offsets[-1] if offsets else 0
+        else:
+            search_from = pos + 1
+        offsets.append(pos)
+    return offsets
+
+
 def segmenter_and_clusterer_node(state: GraphState) -> Dict[str, Any]:
-    """Agent: Splits proceedings into chunks."""
+    """Agent: Splits proceedings into chunks, one text segment per paper."""
     logger.info("Agent: segmenter_and_clusterer_node running.")
     _, instructions = SkillLoader.load_skill(Path("skills/structuralclustering"))
-    
+
     llm = LLMFactory.get_llm()
     structured_llm = llm.with_structured_output(SegmentationManifest, method="function_calling")
-    
+
+    raw_markdown = state["raw_markdown"]
     prompt = SEGMENTER_CLUSTERER_PROMPT.format(
         instructions=instructions,
-        raw_markdown=state["raw_markdown"][:60000]
+        raw_markdown=raw_markdown[:60000]
     )
     manifest = structured_llm.invoke(prompt)
-    
+
+    # Each paper must receive ITS OWN slice of the proceeding, delimited by the
+    # located positions of consecutive paper titles — not a shared prefix of the
+    # whole document.
+    boundaries = _locate_segment_boundaries(raw_markdown, [p.title for p in manifest.papers])
+
     tasks = []
-    for paper in manifest.papers:
+    for i, paper in enumerate(manifest.papers):
+        start = boundaries[i]
+        end = boundaries[i + 1] if i + 1 < len(boundaries) and boundaries[i + 1] > start else len(raw_markdown)
+        segment = raw_markdown[start:end][:15000]
+        if not segment.strip():
+            segment = raw_markdown[:15000]
         tasks.append(PaperTask(
             title=paper.title,
             authors=paper.authors,
-            text_segment=state["raw_markdown"][:15000],
+            text_segment=segment,
             domain_hint=paper.research_problem
         ))
     return {"extraction_tasks": tasks}
@@ -151,8 +186,7 @@ def domain_detector_node(state: GraphState) -> Dict[str, Any]:
     
     if target_domain == "default" and state.get("extraction_tasks"):
         detected_domain = state["extraction_tasks"][0].domain_hint or "default"
-        target_domain = detected_domain.lower().replace(" ", "-")
-        target_domain = re.sub(r'[^a-z0-9\-]', '', target_domain)
+        target_domain = slugify_domain(detected_domain) or "default"
 
     logger.info(f"Agent: Detecting schema validation registry for domain: '{target_domain}'")
     
@@ -276,8 +310,7 @@ def template_proposer_node(state: GraphState) -> Dict[str, Any]:
         properties = [prop.model_dump() for prop in suggestions.properties]
         
         # Formatage de l'identifiant machine svelte pour l'ID de la tâche de validation (ex: Malaria-Induced Bone Loss -> malaria-induced-bone-loss) [3]
-        machine_domain_key = target_domain.lower().replace("_", " ").replace(" ", "-")
-        machine_domain_key = re.sub(r'[^a-z0-9\-]', '', machine_domain_key)
+        machine_domain_key = slugify_domain(target_domain)
         
         celery_id = state.get("celery_task_id")
         if celery_id:
@@ -344,51 +377,58 @@ def academic_features_extraction_node(state: GraphState) -> Dict[str, Any]:
         
     llm = LLMFactory.get_llm()
     structured_llm = llm.with_structured_output(target_schema, method="function_calling")
-    
-    rows = []
-    
-    # 3. Traitement de chaque segment de document
-    for task in state["extraction_tasks"]:
+
+    def extract_one_paper(task: PaperTask):
+        """Runs the extraction + quality-gate retry loop for a single paper segment."""
         prompt = ACADEMIC_EXTRACTION_PROMPT.format(
             instructions=instructions,
             paper_content=task.text_segment
         )
-        
+
         # Boucle d'auto-correction sémantique de Deep Agent (Quality Gate)
         max_attempts = 3
-        extracted_table = None
-        
         for attempt in range(1, max_attempts + 1):
             try:
                 logger.info(f" -> Extraction attempt {attempt}/{max_attempts} for paper '{task.title}'")
                 extracted_table = structured_llm.invoke(prompt)
-                
+
                 for index, row in enumerate(extracted_table.rows):
-                    if index > 0 and len(row.authors) > 0 and set(row.authors) == set(task.authors):
+                    if index > 0 and len(row.authors) > 0 and task.authors and set(row.authors) == set(task.authors):
                         raise ValueError(
                             f"Context Leakage Detected: Baseline row '{row.paper_title}' incorrectly inherited "
                             f"the primary paper's author list {task.authors}. Baselines are independent papers."
                         )
-                break
-                
+                return extracted_table
+
             except Exception as e:
                 logger.warning(f" -> Quality Gate Rejected attempt {attempt} for '{task.title}': {str(e)}")
                 if attempt == max_attempts:
-                    logger.error(f" -> Deep Agent auto-correction exhausted. Abandoning.")
-                    break
-                
+                    logger.error(" -> Deep Agent auto-correction exhausted. Abandoning.")
+                    return None
+
                 prompt = f"""
                 PREVIOUS ATTEMPT FAILED WITH ERROR:
                 {str(e)}
-                
+
                 Please strictly correct your JSON payload. Make sure baseline rows do NOT inherit the primary paper's authors, DOI, or URL.
-                
+
                 {ACADEMIC_EXTRACTION_PROMPT.format(instructions=instructions, paper_content=task.text_segment)}
                 """
-        
-        if extracted_table:
-            rows.append(extracted_table)
-            
+        return None
+
+    # 3. Traitement des segments en parallèle (map) : un proceeding de N papiers
+    # coûte ~1x la latence d'un papier au lieu de Nx, ce qui élimine la cause
+    # structurelle des timeouts du worker Celery sur les gros documents.
+    tasks = state["extraction_tasks"]
+    rows = []
+    if len(tasks) <= 1:
+        results = [extract_one_paper(t) for t in tasks]
+    else:
+        max_workers = min(4, len(tasks))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(extract_one_paper, tasks))
+
+    rows = [table for table in results if table is not None]
     return {"extracted_rows": rows}
 
 
@@ -476,6 +516,10 @@ def route_by_document_scale(state: GraphState) -> Literal["proceeding_flow", "si
     return "single_flow"
 
 def route_start_node(state: GraphState) -> Literal["classify_document", "segment_and_cluster", "domain_detector"]:
+    # Chunks already split deterministically by the API layer: never re-segment,
+    # it would overwrite the real per-paper text with slices of raw_markdown.
+    if state.get("extraction_tasks"):
+        return "domain_detector"
     manual_type = state.get("manual_document_type", "auto")
     if manual_type == "single":
         return "domain_detector"

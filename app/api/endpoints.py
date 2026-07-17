@@ -1,10 +1,9 @@
-import json
 import shutil
 import tempfile
 import uuid
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import List
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
 from pydantic import BaseModel, Field
 from celery.result import AsyncResult
@@ -17,12 +16,12 @@ from app.core.models import (
     TemplateModel, 
     ValidationTaskModel, 
     ComparisonTableModel, 
-    ExtractedRowModel,
     ProceedingChunkModel
 )
 
 from app.core.parse_pdf import extract_pdf_to_markdown, split_proceeding_pdf
 from app.core.dynamic_loader import save_new_template_to_db
+from app.core.utils import slugify_domain
 from app.services.tasks import run_extraction_task, run_schema_proposal_task
 from app.services.orchestrator import recommend_template_for_paper
 
@@ -245,12 +244,10 @@ async def validate_schema_and_extract(task_id: str, payload: ValidateSchemaReque
             detail=f"Invalid task ID format '{task_id}'. Must be a valid hexadecimal UUID string."
         )
     
-    import re
     domain_display_name = payload.domain_display_name.strip()
-    
-    new_template_id = domain_display_name.lower().replace("_", " ").replace(" ", "-")
-    new_template_id = re.sub(r'[^a-z0-9\-]', '', new_template_id)
-    
+
+    new_template_id = slugify_domain(domain_display_name)
+
     if not new_template_id or new_template_id == "default":
         new_template_id = f"custom-default-{uuid.uuid4().hex[:4]}"
         
@@ -262,7 +259,6 @@ async def validate_schema_and_extract(task_id: str, payload: ValidateSchemaReque
             raise HTTPException(status_code=404, detail="Validation task not found.")
             
         raw_markdown = task_record.raw_markdown
-        target_domain = task_record.domain
         original_type = task_record.document_type or "single"
         
         properties_list = [prop.model_dump() for prop in payload.properties]
@@ -287,13 +283,15 @@ async def validate_schema_and_extract(task_id: str, payload: ValidateSchemaReque
         task_record.status = "SUCCESS"
         db.commit()
     
+    # Le template validé par l'humain s'applique au document entier, y compris
+    # pour un proceeding : le passer en "default" ferait perdre le schéma validé.
     celery_task = run_extraction_task.delay(
-        raw_markdown, 
-        original_type, 
-        "default" if original_type == "proceeding" else new_template_id,
+        raw_markdown,
+        original_type,
+        new_template_id,
         extraction_tasks=chunks_payload
     )
-    
+
     return {
         "task_id": celery_task.id,
         "status": "PROCESSING"
@@ -342,7 +340,7 @@ async def resume_with_existing_template(task_id: str, template_id: str = Form(..
     celery_task = run_extraction_task.delay(
         raw_markdown,
         original_type,
-        "default" if original_type == "proceeding" else template_id,
+        template_id,
         extraction_tasks=chunks_payload
     )
     

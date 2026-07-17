@@ -2,7 +2,6 @@ import logging
 from pathlib import Path
 import pymupdf4llm
 import fitz  # PyMuPDF
-import re
 from typing import List
 
 logger = logging.getLogger(__name__)

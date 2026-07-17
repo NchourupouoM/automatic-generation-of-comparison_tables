@@ -1,0 +1,12 @@
+# Lint config kept intentionally lenient so CI focuses on real errors, not style
+# churn, while the codebase is still stabilizing.
+line-length = 120
+target-version = "py311"
+
+[lint]
+# pyflakes (F) catches undefined names / unused imports; a curated subset of
+# pycodestyle (E) catches genuine mistakes. Style-only rules stay off for now.
+select = ["F", "E9"]
+
+[lint.per-file-ignores]
+"__init__.py" = ["F401"]
