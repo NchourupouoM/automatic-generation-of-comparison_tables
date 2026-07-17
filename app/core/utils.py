@@ -1,4 +1,17 @@
 import re
+from typing import Optional
+
+
+def clamp_pagination(limit: Optional[int], offset: Optional[int],
+                     default: int, maximum: int) -> tuple[int, int]:
+    """
+    Normalizes user-supplied pagination params into a safe (limit, offset)
+    pair: limit falls back to `default`, is floored at 1 and capped at
+    `maximum`; offset is floored at 0.
+    """
+    safe_limit = default if not limit or limit < 1 else min(limit, maximum)
+    safe_offset = 0 if not offset or offset < 0 else offset
+    return safe_limit, safe_offset
 
 
 def slugify_domain(value: str) -> str:

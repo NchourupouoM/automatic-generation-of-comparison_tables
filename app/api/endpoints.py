@@ -3,25 +3,27 @@ import tempfile
 import uuid
 import logging
 from pathlib import Path
-from typing import List
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends, Query
 from pydantic import BaseModel, Field
 from celery.result import AsyncResult
 
 from app.core.celery_app import celery_app
+from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.security import require_api_key
 
 # Importation sécurisée des modèles relationnels
 from app.core.models import (
-    TemplateModel, 
-    ValidationTaskModel, 
-    ComparisonTableModel, 
+    TemplateModel,
+    ValidationTaskModel,
+    ComparisonTableModel,
     ProceedingChunkModel
 )
 
 from app.core.parse_pdf import extract_pdf_to_markdown, split_proceeding_pdf
 from app.core.dynamic_loader import save_new_template_to_db
-from app.core.utils import slugify_domain
+from app.core.utils import slugify_domain, clamp_pagination
 from app.services.tasks import run_extraction_task, run_schema_proposal_task
 from app.services.orchestrator import recommend_template_for_paper
 
@@ -51,7 +53,7 @@ class RecommendRequest(BaseModel):
 # Endpoints de traitement des documents
 # ---------------------------------------------------------------------------
 
-@router.post("/ingest", status_code=202)
+@router.post("/ingest", status_code=202, dependencies=[Depends(require_api_key)])
 async def ingest_document(
     file: UploadFile = File(...),
     document_type: str = Form(default="auto"),
@@ -230,7 +232,7 @@ async def get_task_status(task_id: str):
     return response
 
 
-@router.post("/tasks/{task_id}/validate-schema", status_code=202)
+@router.post("/tasks/{task_id}/validate-schema", status_code=202, dependencies=[Depends(require_api_key)])
 async def validate_schema_and_extract(task_id: str, payload: ValidateSchemaRequest):
     """
     Saves the validated schema to templates registry, retrieves ALL persisted 
@@ -301,7 +303,7 @@ async def validate_schema_and_extract(task_id: str, payload: ValidateSchemaReque
 # ---------------------------------------------------------------------------
 # PATH CORRECTIF : Reprise d'extraction robuste avec Template recommandé existant [3]
 # ---------------------------------------------------------------------------
-@router.post("/tasks/{task_id}/resume-with-existing-template", status_code=202)
+@router.post("/tasks/{task_id}/resume-with-existing-template", status_code=202, dependencies=[Depends(require_api_key)])
 async def resume_with_existing_template(task_id: str, template_id: str = Form(...)):
     """
     Deletes the temporary validation task and immediately triggers the final 
@@ -354,7 +356,7 @@ async def resume_with_existing_template(task_id: str, template_id: str = Form(..
 # ---------------------------------------------------------------------------
 # PATH CORRECTIF : Refus et suppression transactionnelle de la queue [3]
 # ---------------------------------------------------------------------------
-@router.post("/tasks/{task_id}/decline", status_code=200)
+@router.post("/tasks/{task_id}/decline", status_code=200, dependencies=[Depends(require_api_key)])
 async def decline_validation_task(task_id: str):
     """
     Deletes the validation task and its associated fragments from PostgreSQL 
@@ -390,10 +392,22 @@ async def decline_validation_task(task_id: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/templates")
-async def list_templates():
+async def list_templates(
+    limit: Optional[int] = Query(default=None, ge=1),
+    offset: Optional[int] = Query(default=None, ge=0),
+):
+    safe_limit, safe_offset = clamp_pagination(limit, offset, settings.DEFAULT_PAGE_SIZE, settings.MAX_PAGE_SIZE)
     with SessionLocal() as db:
-        templates = db.query(TemplateModel).all()
+        total = db.query(TemplateModel).count()
+        templates = (
+            db.query(TemplateModel)
+            .order_by(TemplateModel.created_at.desc())
+            .offset(safe_offset).limit(safe_limit).all()
+        )
         return {
+            "total": total,
+            "limit": safe_limit,
+            "offset": safe_offset,
             "templates": [
                 {
                     "id": t.id,
@@ -405,12 +419,21 @@ async def list_templates():
 
 
 @router.get("/validation-tasks")
-async def list_pending_validation_tasks():
+async def list_pending_validation_tasks(
+    limit: Optional[int] = Query(default=None, ge=1),
+    offset: Optional[int] = Query(default=None, ge=0),
+):
+    safe_limit, safe_offset = clamp_pagination(limit, offset, settings.DEFAULT_PAGE_SIZE, settings.MAX_PAGE_SIZE)
     with SessionLocal() as db:
-        tasks = db.query(ValidationTaskModel).filter(
+        base = db.query(ValidationTaskModel).filter(
             ValidationTaskModel.status == "PENDING_SCHEMA_VALIDATION"
-        ).all()
+        )
+        total = base.count()
+        tasks = base.order_by(ValidationTaskModel.created_at.desc()).offset(safe_offset).limit(safe_limit).all()
         return {
+            "total": total,
+            "limit": safe_limit,
+            "offset": safe_offset,
             "tasks": [
                 {
                     "task_id": str(t.task_id),
@@ -423,10 +446,22 @@ async def list_pending_validation_tasks():
 
 
 @router.get("/comparisons")
-async def list_finalized_comparisons():
+async def list_finalized_comparisons(
+    limit: Optional[int] = Query(default=None, ge=1),
+    offset: Optional[int] = Query(default=None, ge=0),
+):
+    safe_limit, safe_offset = clamp_pagination(limit, offset, settings.DEFAULT_PAGE_SIZE, settings.MAX_PAGE_SIZE)
     with SessionLocal() as db:
-        tables = db.query(ComparisonTableModel).all()
+        total = db.query(ComparisonTableModel).count()
+        tables = (
+            db.query(ComparisonTableModel)
+            .order_by(ComparisonTableModel.created_at.desc())
+            .offset(safe_offset).limit(safe_limit).all()
+        )
         return {
+            "total": total,
+            "limit": safe_limit,
+            "offset": safe_offset,
             "comparisons": [
                 {
                     "id": str(t.id),

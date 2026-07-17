@@ -237,6 +237,20 @@ single-page UI is served directly from `app/static`.
    curl -X GET "http://localhost:8000/api/v1/tasks/84a37bde-3456-4cde-a12e-1234567890ab"
    ```
 
+### API security (optional)
+Set `API_KEY` in your environment to require an `X-API-Key` header on all
+mutating endpoints (`/ingest`, `/validate-schema`, `/resume-with-existing-template`,
+`/decline`). When unset, the API stays open for local development.
+```bash
+curl -X POST "http://localhost:8000/api/v1/ingest" \
+  -H "X-API-Key: $API_KEY" -F "file=@paper.pdf" -F "domain=default"
+```
+
+### Pagination
+List endpoints (`/comparisons`, `/templates`, `/validation-tasks`) accept
+`?limit=&offset=` and return `{total, limit, offset, ...}`. `limit` defaults to
+`DEFAULT_PAGE_SIZE` and is capped at `MAX_PAGE_SIZE`.
+
 ---
 
 ## 6. Quality: Tests & Evaluation
