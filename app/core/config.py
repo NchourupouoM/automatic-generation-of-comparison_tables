@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: Optional[str] = None
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
+    # Application security. When API_KEY is set, mutating endpoints require a
+    # matching `X-API-Key` header. Left unset, the API is open (local dev).
+    API_KEY: Optional[str] = None
+
+    # Default page size for list endpoints.
+    DEFAULT_PAGE_SIZE: int = 50
+    MAX_PAGE_SIZE: int = 200
+
     # PostgreSQL Configuration
     DATABASE_URL: str = Field(
         ..., 

@@ -2,7 +2,7 @@
 
 A modular, domain-driven agentic framework designed to parse and extract structured comparative data from scientific literature. 
 
-The system leverages **LangGraph** for granular multi-agent orchestration, **FastAPI** for REST endpoints, **Celery/Redis** for resilient asynchronous task queuing, and **Streamlit** for interactive visualization. It natively conforms to the open **agentskills.io** specification for dynamic, file-based skill injection.
+The system leverages **LangGraph** for granular multi-agent orchestration, **FastAPI** for REST endpoints, **Celery/Redis** for resilient asynchronous task queuing, **PostgreSQL** for persistence (templates, tasks, and results), and a **vanilla-JS single-page UI** served as static files. It natively conforms to the open **agentskills.io** specification for dynamic, file-based skill injection.
 
 ---
 
@@ -71,60 +71,63 @@ flowchart TD
 This project follows Clean Code and Domain-Driven Design (DDD) principles:
 
 ```text
-scientific-extractor/
+automatic-generation-of-comparison_tables/
 ├── app/
 │   ├── api/
-│   │   └── endpoints.py         # FastAPI routes (/ingest, /tasks)
+│   │   └── endpoints.py         # FastAPI routes (/ingest, /tasks, /templates, ...)
 │   ├── core/
 │   │   ├── celery_app.py        # Celery client initialization
-│   │   ├── config.py            # Environment validation
-│   │   ├── domains_registry.py  # Domain-specific config mappings
-│   │   ├── llm_factory.py       # Model-agnostic LLM initializer
-│   │   ├── parse_pdf.py         # Programmatic PDF extraction helper
+│   │   ├── config.py            # Environment validation (pydantic-settings)
+│   │   ├── database.py          # SQLAlchemy engine, session factory, Base
+│   │   ├── models.py            # Relational models (templates, tasks, tables, rows)
+│   │   ├── dynamic_loader.py    # Compiles Pydantic table models from DB templates
+│   │   ├── llm_factory.py       # Model-agnostic LLM initializer (lazy provider imports)
+│   │   ├── parse_pdf.py         # Programmatic PDF extraction & proceeding splitting
+│   │   ├── prompts.py           # Isolated agent prompt templates
 │   │   ├── schemas.py           # Core Pydantic output schemas
-│   │   └── skills_loader.py     # agentskills.io metadata parser
-│   ├── domains/
-│   │   └── infectious_disease/
-│   │       └── schemas.py       # Infectious Disease custom Pydantic schemas
+│   │   ├── skills_loader.py     # agentskills.io metadata parser
+│   │   └── utils.py             # Shared helpers (domain slugification)
 │   ├── services/
-│   │   └── orchestrator.py      # LangGraph state machine & node agents
-│   └── main.py                  # API entrypoint
-├── skills/                      # agentskills.io dynamic skills
-│   ├── academicextraction/
-│   │   └── SKILL.md             # Standard comparison extraction guidelines
-│   ├── infectious-disease-extraction/
-│   │   └── SKILL.md             # Pathogen & clinical trials guidelines
-│   └── structuralclustering/
-│       └── SKILL.md             # Document segmenter instructions
-├── app_ui.py                    # Streamlit visualizer
-├── requirements.txt             # Project dependencies
-└── .env.example                 # Environment variables blueprint
+│   │   ├── orchestrator.py      # LangGraph state machine & node agents
+│   │   └── tasks.py             # Celery task entrypoints
+│   ├── static/                  # Vanilla-JS single-page UI (index.html, app.js, style.css)
+│   └── main.py                  # FastAPI entrypoint + static mount
+├── skills/                      # agentskills.io dynamic skills (SKILL.md per domain)
+├── evals/                       # Evaluation harness
+│   ├── pdfs/                    # 26-paper regression corpus
+│   ├── golden/                  # Hand-verified ground-truth tables (+ _TEMPLATE.json)
+│   ├── scoring.py               # Field-level precision/recall/F1 scoring
+│   ├── invariants.py            # Structural correctness checks (no golden needed)
+│   └── run_eval.py              # End-to-end runner (--smoke for corpus-wide invariants)
+├── tests/                       # Offline, deterministic pytest suite
+├── .github/workflows/
+│   ├── ci.yml                   # Lint + tests on PRs and feature branches
+│   └── gcp-deploy.yml           # Test-gated build & deploy to Cloud Run on main
+└── requirements.txt             # Project dependencies
 ```
 
 ---
 
 ## 3. Dynamic Domain Extensibility
 
-To add a new scientific domain (e.g., `oncology` or `materials-science`):
+Domains are **data, not code**. Their schemas live in the PostgreSQL `templates`
+table and are compiled into validated Pydantic models at runtime by
+`app/core/dynamic_loader.py` — there is no code registry to edit. There are two
+ways to add a domain:
 
-### Step A: Define the Schema
-Create a new schemas folder: `app/domains/your_domain/schemas.py`. Define a row template (`YourDomainRow`) and a table wrapper (`YourDomainComparisonTable`).
-```python
-from pydantic import BaseModel, Field
-from typing import List, Optional
+### Path A: Human-in-the-Loop (no code, the default)
+Ingest a paper with `domain=default`. The pipeline infers the scientific domain,
+the **Template Proposer** agent suggests comparative properties, and the API
+returns them for human review (`PENDING_SCHEMA_VALIDATION`). Approving them via
+`POST /api/v1/tasks/{id}/validate-schema` persists the new template, which is
+then reused automatically for every future paper in that domain.
 
-class YourDomainRow(BaseModel):
-    paper_title: str
-    authors: List[str]
-    custom_metric: Optional[str] = Field(None, description="Your description")
+### Path B: Author an extraction Skill (optional, for domain heuristics)
+To give the extractor domain-specific guidance, add an agentskills.io skill:
+create `skills/<your-domain>/SKILL.md` with YAML frontmatter and step-by-step
+instructions. The extractor resolves `skills/{domain}` at runtime and falls back
+to `skills/academicextraction` when no matching skill exists.
 
-class YourDomainComparisonTable(BaseModel):
-    research_problem: str
-    rows: List[YourDomainRow]
-```
-
-### Step B: Create the agentskills.io Specification
-Create a new skill folder: `skills/your-domain-extraction/SKILL.md`. Include a YAML frontmatter block and step-by-step instructions.
 ```markdown
 ---
 name: yourdomainextraction
@@ -136,18 +139,8 @@ metadata:
 Provide detailed clinical/scientific heuristics for parsing.
 ```
 
-### Step C: Register the Domain
-Register the new domain in `app/core/domains_registry.py`:
-```python
-from app.domains.your_domain.schemas import YourDomainComparisonTable
-
-DOMAINS_REGISTRY["your-domain"] = DomainConfig(
-    schema_class=YourDomainComparisonTable,
-    skill_path=Path("skills/your-domain-extraction")
-)
-```
-
-The orchestrator and Streamlit UI will automatically pick up this configuration without any further modifications.
+Both the orchestrator and the web UI pick up new templates and skills without
+any further code changes.
 
 ---
 
@@ -173,16 +166,12 @@ source .venv/bin/activate  # On Windows: .\.venv\Scripts\activate
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
-pip install uvicorn streamlit pandas PyYAML
 ```
 
 ### 3. Configure Variables
-Copy the example configuration to a local `.env` file:
-```bash
-cp .env.example .env
-```
-Open `.env` and fill in your keys:
+Create a local `.env` file at the project root with your configuration:
 ```env
+DATABASE_URL=postgresql://user:pass@localhost:5432/extractor
 REDIS_URL=redis://localhost:6379/0
 LLM_PROVIDER=openai
 LLM_MODEL_NAME=gpt-4o
@@ -190,6 +179,8 @@ LLM_MODEL_NAME=gpt-4o
 # LLM_MODEL_NAME=llama
 OPENAI_API_KEY=your-openai-api-key
 ```
+`DATABASE_URL` is required (the app validates it at startup); the tables are
+auto-created on first boot via `Base.metadata.create_all`.
 
 ### 4. Start Services (Requires 3 Terminals)
 
@@ -214,15 +205,14 @@ uvicorn app.main:app --reload --port 8000
 
 ## 5. Running and Testing the Pipeline
 
-### Testing with Streamlit (Interactive UI)
-Open a 4th terminal, activate the virtual environment, and run:
-```bash
-streamlit run app_ui.py
-```
-Open the visualizer at `http://localhost:8501`. 
+### Testing with the Web UI
+Once the FastAPI app is running, open `http://localhost:8000/` — the vanilla-JS
+single-page UI is served directly from `app/static`.
 *   Drop a PDF of a paper or a proceeding.
-*   Select your **Scientific Domain Template** (e.g., "Infectious Disease" or "General Academic").
-*   Click **Start Extraction Task**. Streamlit will poll the task in the background and display the final comparative matrix as a clear flat table, ready for a **CSV Download**.
+*   Pick a registered **Domain Template**, or leave it on **default** to trigger
+    the human-in-the-loop schema proposal flow.
+*   Start the extraction; the page polls the task and renders the final
+    comparative matrix as a flat table.
 
 ### Testing with cURL (API Mode)
 
@@ -237,8 +227,8 @@ Open the visualizer at `http://localhost:8501`.
    ```json
    {
      "task_id": "84a37bde-3456-4cde-a12e-1234567890ab",
-     "status": "PENDING",
-     "detail": "Processing in domain 'infectious-disease' started."
+     "status": "PROCESSING",
+     "detail": "Direct extraction initiated for domain 'infectious-disease'."
    }
    ```
 
@@ -247,11 +237,61 @@ Open the visualizer at `http://localhost:8501`.
    curl -X GET "http://localhost:8000/api/v1/tasks/84a37bde-3456-4cde-a12e-1234567890ab"
    ```
 
+### API security (optional)
+Set `API_KEY` in your environment to require an `X-API-Key` header on all
+mutating endpoints (`/ingest`, `/validate-schema`, `/resume-with-existing-template`,
+`/decline`). When unset, the API stays open for local development.
+```bash
+curl -X POST "http://localhost:8000/api/v1/ingest" \
+  -H "X-API-Key: $API_KEY" -F "file=@paper.pdf" -F "domain=default"
+```
+
+### Pagination
+List endpoints (`/comparisons`, `/templates`, `/validation-tasks`) accept
+`?limit=&offset=` and return `{total, limit, offset, ...}`. `limit` defaults to
+`DEFAULT_PAGE_SIZE` and is capped at `MAX_PAGE_SIZE`.
+
 ---
 
-## 6. Contribution Standards & Code Quality
+## 6. Quality: Tests & Evaluation
+
+The project ships with two independent quality layers.
+
+### Unit tests (offline, deterministic — no LLM/DB/network)
+```bash
+pip install pytest ruff
+ruff check app evals tests
+pytest -q
+```
+These cover PDF splitting, the skills loader, dynamic model compilation, domain
+slugification, proceeding-segment boundary logic, and the eval scoring/invariant
+libraries. They run on every push and pull request via `.github/workflows/ci.yml`,
+and gate the production deploy in `gcp-deploy.yml`.
+
+### Evaluation harness (measures extraction quality)
+`evals/` contains a 26-paper regression corpus (`evals/pdfs/`) and a scoring
+framework that turns "the prompts seem to work" into a measured number.
+
+```bash
+# Structural invariants across the whole corpus (needs LLM creds + DB, no golden):
+python -m evals.run_eval --smoke
+
+# Field-level precision/recall/F1 against hand-verified golden tables:
+python -m evals.run_eval
+```
+
+To score accuracy, annotate papers by copying `evals/golden/_TEMPLATE.json` to
+`evals/golden/<pdf-stem>.json` and filling in the correct table — see
+`evals/golden/README.md`. Papers without a golden file are still checked for
+structural correctness (exactly one proposed row, no author leakage onto
+baselines, well-formed DOIs, non-empty titles).
+
+---
+
+## 7. Contribution Standards & Code Quality
 
 To keep the project maintainable and robust, contributors must adhere to the following rules:
 *   **Strong Typing**: All payloads must be strictly validated using Pydantic. Avoid arbitrary `dict` returns.
 *   **Strict Non-Inheritance**: Ensure that any new extraction skill strictly instructs the agent not to copy coordinates of the main paper onto baselines.
 *   **Agnostic LLM Binding**: Do not instantiate LLM clients directly inside the skills or services. Always request them from `LLMFactory.get_llm()` to ensure interoperability across model providers.
+*   **Green CI**: New code must pass `ruff check` and `pytest`. Add tests for any new deterministic logic, and an eval golden file when you add a domain you can verify.
