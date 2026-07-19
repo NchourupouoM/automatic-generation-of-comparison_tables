@@ -82,29 +82,42 @@ async def ingest_document(
 
     tasks_payload = []
     
-    # 1. Découpage déterministe immédiat sur l'API s'il s'agit d'un proceeding
+    # 1. Découpage déterministe immédiat sur l'API s'il s'agit d'un proceeding.
+    # Le découpage n'est utilisé que s'il est CONFIANT (>= 2 segments, typiquement
+    # via un sommaire PDF validé). Sinon, on ne devine pas au risque de couper un
+    # article en deux : on transmet le document entier au segmenteur LLM.
     if normalized_type == "proceeding":
         temp_split_dir = temp_dir / f"split_{uuid.uuid4()}"
         split_paths = split_proceeding_pdf(str(dest_file_path), temp_split_dir)
-        
-        for path in split_paths:
+
+        if len(split_paths) >= 2:
+            for path in split_paths:
+                try:
+                    markdown_content = extract_pdf_to_markdown(str(path))
+                    tasks_payload.append({
+                        "title": path.stem.replace("_", " ").title(),
+                        "authors": [],
+                        "text_segment": markdown_content,
+                        "domain_hint": "default"
+                    })
+                    path.unlink()
+                except Exception as e:
+                    shutil.rmtree(str(temp_split_dir), ignore_errors=True)
+                    dest_file_path.unlink()
+                    raise HTTPException(status_code=500, detail=f"Failed parsing proceeding chunks: {str(e)}")
+            raw_markdown = ""
+        else:
+            # Pas de frontières fiables : on défère au segmenteur LLM (extraction_tasks vide).
+            logger.info("No confident deterministic proceeding split; deferring to the LLM segmenter.")
             try:
-                markdown_content = extract_pdf_to_markdown(str(path))
-                tasks_payload.append({
-                    "title": path.stem.replace("_", " ").title(),
-                    "authors": [],
-                    "text_segment": markdown_content,
-                    "domain_hint": "default"
-                })
-                path.unlink()
+                raw_markdown = extract_pdf_to_markdown(str(dest_file_path))
             except Exception as e:
                 shutil.rmtree(str(temp_split_dir), ignore_errors=True)
                 dest_file_path.unlink()
-                raise HTTPException(status_code=500, detail=f"Failed parsing proceeding chunks: {str(e)}")
-                
+                raise HTTPException(status_code=500, detail=f"Failed parsing proceeding PDF: {str(e)}")
+
         shutil.rmtree(str(temp_split_dir), ignore_errors=True)
         dest_file_path.unlink()
-        raw_markdown = ""
     else:
         # Cas Single Paper classique
         try:
