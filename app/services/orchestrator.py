@@ -1,5 +1,6 @@
 import logging
 import uuid
+import concurrent.futures
 from pathlib import Path
 from typing import Dict, List, Any, Literal, Optional
 from typing_extensions import TypedDict
@@ -117,10 +118,26 @@ def classify_document_node(state: GraphState) -> Dict[str, Any]:
 
 
 def segmenter_and_clusterer_node(state: GraphState) -> Dict[str, Any]:
-    """Agent: Splits proceedings into chunks."""
-    logger.info("Agent: segmenter_and_clusterer_node running.")
+    """Agent: Splits proceedings into chunks.
+
+    Si l'API a déjà découpé le proceeding de façon déterministe (via
+    ``split_proceeding_pdf``) et fourni les segments dans ``extraction_tasks``,
+    on les respecte tels quels : chaque papier conserve son propre texte isolé.
+    Ré-segmenter ici écraserait ce découpage fiable par une inférence LLM
+    approximative (et attribuerait le même texte à tous les papiers), ce qui
+    rendait le découpage de proceeding inefficace.
+    """
+    existing_tasks = state.get("extraction_tasks") or []
+    if existing_tasks:
+        logger.info(
+            f"Agent: segmenter passthrough — {len(existing_tasks)} pre-split "
+            "paper segment(s) already provided by the ingestion layer."
+        )
+        return {"extraction_tasks": existing_tasks}
+
+    logger.info("Agent: segmenter_and_clusterer_node running (LLM fallback segmentation).")
     _, instructions = SkillLoader.load_skill(Path("skills/structuralclustering"))
-    
+
     llm = LLMFactory.get_llm()
     structured_llm = llm.with_structured_output(SegmentationManifest, method="function_calling")
     
@@ -316,14 +333,59 @@ def template_validator_node(state: GraphState) -> Dict[str, Any]:
     return {"extraction_tasks": tasks}
 
 
+def _extract_single_paper(task: "PaperTask", instructions: str, structured_llm) -> Any:
+    """Extrait la matrice comparative d'un seul papier, avec la boucle
+    d'auto-correction sémantique (Quality Gate). Retourne le tableau extrait
+    ou ``None`` si toutes les tentatives échouent. Fonction pure et isolée :
+    elle peut donc être exécutée en parallèle pour plusieurs papiers."""
+    prompt = ACADEMIC_EXTRACTION_PROMPT.format(
+        instructions=instructions,
+        paper_content=task.text_segment
+    )
+
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            logger.info(f" -> Extraction attempt {attempt}/{max_attempts} for paper '{task.title}'")
+            extracted_table = structured_llm.invoke(prompt)
+
+            for index, row in enumerate(extracted_table.rows):
+                if index > 0 and len(row.authors) > 0 and set(row.authors) == set(task.authors):
+                    raise ValueError(
+                        f"Context Leakage Detected: Baseline row '{row.paper_title}' incorrectly inherited "
+                        f"the primary paper's author list {task.authors}. Baselines are independent papers."
+                    )
+            return extracted_table
+
+        except Exception as e:
+            logger.warning(f" -> Quality Gate Rejected attempt {attempt} for '{task.title}': {str(e)}")
+            if attempt == max_attempts:
+                logger.error(f" -> Deep Agent auto-correction exhausted for '{task.title}'. Abandoning.")
+                return None
+
+            prompt = f"""
+            PREVIOUS ATTEMPT FAILED WITH ERROR:
+            {str(e)}
+
+            Please strictly correct your JSON payload. Make sure baseline rows do NOT inherit the primary paper's authors, DOI, or URL.
+
+            {ACADEMIC_EXTRACTION_PROMPT.format(instructions=instructions, paper_content=task.text_segment)}
+            """
+    return None
+
+
 def academic_features_extraction_node(state: GraphState) -> Dict[str, Any]:
     """
     Agent: Academic Features Extraction.
     Resolves the Skill instructions and dynamic validation schemas.
+
+    Les papiers d'un proceeding sont indépendants : leur extraction est
+    exécutée en parallèle (les appels LLM étant I/O-bound) afin de réduire
+    fortement le temps total de création des contributions.
     """
     target_domain = state.get("domain", "default")
     logger.info(f"Agent: Academic Features Extractor running for domain '{target_domain}'")
-    
+
     # ---------------------------------------------------------------------------
     # CORRECTIF : Résolution dynamique du chemin du Skill sémantique [3]
     # ---------------------------------------------------------------------------
@@ -332,63 +394,45 @@ def academic_features_extraction_node(state: GraphState) -> Dict[str, Any]:
         # Fallback de sécurité vers la compétence générique d'extraction si non-référencée
         logger.info(f"Skill directory 'skills/{target_domain}' not found. Falling back to 'academicextraction'.")
         skill_dir = Path("skills/academicextraction")
-        
+
     _, instructions = SkillLoader.load_skill(skill_dir)
-    
+
     # 2. Résolution du modèle de validation
     if target_domain == "default":
         target_schema = ComparisonTable
     else:
         with SessionLocal() as db:
             target_schema = compile_dynamic_table_model(target_domain, db)
-        
+
     llm = LLMFactory.get_llm()
     structured_llm = llm.with_structured_output(target_schema, method="function_calling")
-    
-    rows = []
-    
-    # 3. Traitement de chaque segment de document
-    for task in state["extraction_tasks"]:
-        prompt = ACADEMIC_EXTRACTION_PROMPT.format(
-            instructions=instructions,
-            paper_content=task.text_segment
-        )
-        
-        # Boucle d'auto-correction sémantique de Deep Agent (Quality Gate)
-        max_attempts = 3
-        extracted_table = None
-        
-        for attempt in range(1, max_attempts + 1):
-            try:
-                logger.info(f" -> Extraction attempt {attempt}/{max_attempts} for paper '{task.title}'")
-                extracted_table = structured_llm.invoke(prompt)
-                
-                for index, row in enumerate(extracted_table.rows):
-                    if index > 0 and len(row.authors) > 0 and set(row.authors) == set(task.authors):
-                        raise ValueError(
-                            f"Context Leakage Detected: Baseline row '{row.paper_title}' incorrectly inherited "
-                            f"the primary paper's author list {task.authors}. Baselines are independent papers."
-                        )
-                break
-                
-            except Exception as e:
-                logger.warning(f" -> Quality Gate Rejected attempt {attempt} for '{task.title}': {str(e)}")
-                if attempt == max_attempts:
-                    logger.error(f" -> Deep Agent auto-correction exhausted. Abandoning.")
-                    break
-                
-                prompt = f"""
-                PREVIOUS ATTEMPT FAILED WITH ERROR:
-                {str(e)}
-                
-                Please strictly correct your JSON payload. Make sure baseline rows do NOT inherit the primary paper's authors, DOI, or URL.
-                
-                {ACADEMIC_EXTRACTION_PROMPT.format(instructions=instructions, paper_content=task.text_segment)}
-                """
-        
-        if extracted_table:
-            rows.append(extracted_table)
-            
+
+    tasks = state["extraction_tasks"]
+
+    # 3. Extraction parallèle de chaque segment de document (papier).
+    #    On borne la concurrence pour éviter de saturer l'API du fournisseur LLM.
+    if not tasks:
+        return {"extracted_rows": []}
+
+    max_workers = max(1, min(settings.EXTRACTION_MAX_CONCURRENCY, len(tasks)))
+    results: List[Any] = [None] * len(tasks)
+
+    if max_workers == 1 or len(tasks) == 1:
+        for i, task in enumerate(tasks):
+            results[i] = _extract_single_paper(task, instructions, structured_llm)
+    else:
+        logger.info(f"Agent: launching parallel extraction of {len(tasks)} papers (max_workers={max_workers}).")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(_extract_single_paper, task, instructions, structured_llm): i
+                for i, task in enumerate(tasks)
+            }
+            for future in concurrent.futures.as_completed(future_to_index):
+                idx = future_to_index[future]
+                results[idx] = future.result()
+
+    # Conserve l'ordre d'entrée et écarte les papiers dont l'extraction a échoué.
+    rows = [table for table in results if table is not None]
     return {"extracted_rows": rows}
 
 

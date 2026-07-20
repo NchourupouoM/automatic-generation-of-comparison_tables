@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "openai"  # openai, anthropic, ollama, google
     LLM_MODEL_NAME: str = "gpt-4o"
 
+    # Nombre maximum d'extractions de papiers exécutées en parallèle dans un
+    # même proceeding. Les appels LLM sont I/O-bound : les paralléliser réduit
+    # drastiquement le temps total de création des contributions.
+    EXTRACTION_MAX_CONCURRENCY: int = 8
+
     # API Keys & URLs
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
