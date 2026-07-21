@@ -1,0 +1,37 @@
+{
+  "id": "single_cancer_dietetics.example",
+  "description": "PLACEHOLDER scaffolding fixture — replace input.raw_markdown with a real paper's extracted markdown and expected.tables with a hand-verified comparison table before the score means anything. Cite the source paper (title, DOI) here.",
+  "document_type": "single",
+  "domain": "default",
+  "input": {
+    "raw_markdown": "# A Dietary Protocol for Reducing Colorectal Tumor Markers\n\n**Authors:** Jane Doe, Alan Smith\n\n## Abstract\nWe introduce a new dietary protocol. Our proposed method reduces tumor markers by 30%, compared to the standard-of-care baseline of Smith et al. 2020 which achieved 20%.\n\n## Results\nOur protocol: 30% reduction. Baseline (Smith 2020): 20% reduction."
+  },
+  "expected": {
+    "tables": [
+      {
+        "research_problem": "Reducing colorectal tumor markers through dietary intervention",
+        "rows": [
+          {
+            "paper_title": "A Dietary Protocol for Reducing Colorectal Tumor Markers",
+            "is_proposed_method": true,
+            "authors": ["Jane Doe", "Alan Smith"],
+            "publication_year": 2023,
+            "research_method": "Dietary intervention trial",
+            "domain_specific_properties": {
+              "tumor_marker_reduction": "30%"
+            }
+          },
+          {
+            "paper_title": "Standard of Care Dietary Baseline",
+            "is_proposed_method": false,
+            "authors": ["Smith"],
+            "publication_year": 2020,
+            "domain_specific_properties": {
+              "tumor_marker_reduction": "20%"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

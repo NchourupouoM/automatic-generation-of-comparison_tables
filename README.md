@@ -255,3 +255,33 @@ To keep the project maintainable and robust, contributors must adhere to the fol
 *   **Strong Typing**: All payloads must be strictly validated using Pydantic. Avoid arbitrary `dict` returns.
 *   **Strict Non-Inheritance**: Ensure that any new extraction skill strictly instructs the agent not to copy coordinates of the main paper onto baselines.
 *   **Agnostic LLM Binding**: Do not instantiate LLM clients directly inside the skills or services. Always request them from `LLMFactory.get_llm()` to ensure interoperability across model providers.
+
+---
+
+## 7. Testing & Evaluation
+
+The project's value depends on the *accuracy* of the tables it extracts, so
+quality is measured, not assumed.
+
+### Unit tests (no API key required)
+```bash
+pip install -r requirements-dev.txt
+pytest -m "not llm"
+```
+These cover the pure scorer (`tests/eval/scoring.py`) and pipeline smoke checks,
+and run automatically in CI (`.github/workflows/tests.yml`) on every push and PR.
+
+### Extraction accuracy benchmark
+`tests/fixtures/` holds **gold** examples — real papers paired with their
+hand-verified correct comparison tables. The evaluation runner drives the actual
+extraction pipeline over them and reports row/cell precision, recall and F1, plus
+metadata-leakage checks:
+```bash
+python -m tests.eval.runner            # real run — needs a configured LLM in .env
+python -m tests.eval.runner --fake     # wiring smoke test, no API key
+python -m tests.eval.runner --min-f1 0.70   # fail if aggregate cell-F1 drops below 0.70
+```
+The fixtures shipped with `.example.json` names are **placeholders** — replace
+them with real ground-truth (see `tests/fixtures/README.md`). Once real gold and
+an API-key secret are in place, uncomment the accuracy gate in the CI workflow to
+block pull requests that regress extraction quality.

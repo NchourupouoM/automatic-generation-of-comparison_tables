@@ -1,0 +1,43 @@
+name: Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    name: Unit tests & scorer
+    runs-on: ubuntu-latest
+    env:
+      # Dummy value so app settings import cleanly; no real DB is contacted by
+      # the non-LLM test subset.
+      DATABASE_URL: postgresql://user:pass@localhost:5432/placeholder
+      OPENAI_API_KEY: sk-placeholder-not-used
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests (excluding those that need a live LLM)
+        run: pytest -m "not llm"
+
+      # Once real gold fixtures and an LLM API key (as a repo secret) are in
+      # place, enable the accuracy gate below to block PRs that regress quality:
+      #
+      # - name: Extraction accuracy gate
+      #   env:
+      #     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      #   run: python -m tests.eval.runner --min-f1 0.70
