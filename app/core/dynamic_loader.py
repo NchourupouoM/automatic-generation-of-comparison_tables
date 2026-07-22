@@ -4,6 +4,7 @@ from pydantic import BaseModel, create_model, Field
 from sqlalchemy.orm import Session
 import re
 from app.core.models import TemplateModel
+from app.core.schemas import EvidenceItem
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +58,19 @@ def compile_dynamic_table_model(template_id: str, db: Session) -> Type[BaseModel
         field_name = field["name"].strip().lower().replace(" ", "_")
         field_type = map_metadata_type_to_python(field.get("type", "str"))
         field_desc = field.get("description", "")
-        
+
         dynamic_row_fields[field_name] = (
-            field_type, 
+            field_type,
             Field(default=None, description=field_desc)
         )
+
+    # Grounding: every dynamic row also carries verbatim source quotes so each
+    # extracted value can be traced back to the paper.
+    dynamic_row_fields["evidence"] = (
+        List[EvidenceItem],
+        Field(default_factory=list,
+              description="For each important extracted value, a {field, quote} pair whose quote is copied verbatim from the paper.")
+    )
 
     # ---------------------------------------------------------------------------
     # CORRECTION : Nettoyage strict (Sanitization) pour satisfaire les APIs de LLM

@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.llm_factory import LLMFactory
 from app.core.database import SessionLocal
 from app.core.models import TemplateModel, ValidationTaskModel, ComparisonTableModel, ExtractedRowModel
+from app.core.entities import resolve_entity
 from app.core.dynamic_loader import compile_dynamic_table_model
 from app.core.schemas import ComparisonTable
 from app.core.skills_loader import SkillLoader
@@ -459,18 +460,37 @@ def table_synthesizer_node(state: GraphState) -> Dict[str, Any]:
             rows_payload = []
             for index, row in enumerate(table_data.rows):
                 row_dict = row.model_dump()
-                
+
+                # Pull grounding + core-schema property list out before splitting.
+                evidence = row_dict.pop("evidence", None) or []
+                core_props = row_dict.pop("domain_specific_properties", None)
+
                 bibliographic_meta = {}
                 domain_specific_phi = {}
-                
                 for key, val in row_dict.items():
                     if key in STANDARD_FIELDS:
                         bibliographic_meta[key] = val
                     else:
                         domain_specific_phi[key] = val
-                
+
+                # Flatten the strongly-typed core-schema property list into a clean
+                # {name: value} map, so both extraction paths persist the same shape.
+                if isinstance(core_props, list):
+                    for prop in core_props:
+                        name = prop.get("property_name")
+                        if name:
+                            domain_specific_phi[name] = prop.get("property_value")
+
                 is_proposed = (index == 0)
-                
+
+                # Cross-paper entity resolution: link this mention to a canonical paper.
+                entity = resolve_entity(
+                    db,
+                    title=row.paper_title,
+                    authors=row.authors,
+                    doi=bibliographic_meta.get("doi"),
+                )
+
                 db_row = ExtractedRowModel(
                     id=uuid.uuid4(),
                     table_id=db_table.id,
@@ -478,18 +498,22 @@ def table_synthesizer_node(state: GraphState) -> Dict[str, Any]:
                     authors=row.authors,
                     is_proposed_method=is_proposed,
                     bibliographic_metadata=bibliographic_meta,
-                    domain_properties=domain_specific_phi
+                    domain_properties=domain_specific_phi,
+                    evidence=evidence,
+                    entity_id=entity.id if entity else None,
                 )
                 db.add(db_row)
-                
+
                 rows_payload.append({
                     "paper_title": row.paper_title,
                     "authors": row.authors,
                     "is_proposed_method": is_proposed,
                     "domain_specific_properties": domain_specific_phi,
+                    "evidence": evidence,
+                    "entity_id": str(entity.id) if entity else None,
                     **bibliographic_meta
                 })
-            
+
             db.commit()
             
             persisted_tables_payload.append({

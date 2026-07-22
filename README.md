@@ -288,7 +288,41 @@ baselines, well-formed DOIs, non-empty titles).
 
 ---
 
-## 7. Contribution Standards & Code Quality
+## 7. Traceability & the Paper Graph
+
+Two capabilities make the extracted tables verifiable and connected rather than
+opaque and isolated.
+
+### Grounded citations (evidence)
+Every extracted value can be traced to its source. Each row carries an
+`evidence` list of `{field, quote}` pairs, where `quote` is copied verbatim from
+the paper. The extraction agent is instructed to ground each comparative metric
+and key bibliographic field; the value is stored on `extracted_rows.evidence` and
+returned in the API payload. In the UI a **🔍 Source** control on each row reveals
+the supporting quotes, so a reviewer can confirm a cell in one click.
+
+### Cross-paper entity resolution
+The same baseline paper is often cited across many studies. `app/core/entities.py`
+resolves each extracted row to a single canonical `paper_entities` record
+(keyed by normalized DOI, else a title slug), so those scattered mentions collapse
+into one linked identity with a `mention_count`.
+
+```
+GET /api/v1/entities            # canonical papers, most-referenced first
+GET /api/v1/entities/{id}       # a paper and every table it appears in (proposed vs baseline)
+```
+
+The **Paper Entities** tab surfaces this graph: a baseline cited in five tables
+shows up once, marked `5×`, linking through to each appearance.
+
+> Note: both features add columns/tables (`extracted_rows.evidence`,
+> `extracted_rows.entity_id`, `paper_entities`). Fresh installs get them via
+> `Base.metadata.create_all`; existing databases need a one-time migration to add
+> them.
+
+---
+
+## 8. Contribution Standards & Code Quality
 
 To keep the project maintainable and robust, contributors must adhere to the following rules:
 *   **Strong Typing**: All payloads must be strictly validated using Pydantic. Avoid arbitrary `dict` returns.

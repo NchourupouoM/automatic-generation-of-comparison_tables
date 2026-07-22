@@ -1,7 +1,7 @@
 import datetime
 import uuid
 from typing import List, Dict, Any, Optional
-from sqlalchemy import String, Text, TIMESTAMP, ForeignKey, Boolean, text
+from sqlalchemy import String, Text, TIMESTAMP, ForeignKey, Boolean, Integer, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -100,6 +100,28 @@ class ComparisonTableModel(Base):
     )
 
 
+class PaperEntityModel(Base):
+    """
+    Represents the 'paper_entities' table — the canonical, de-duplicated identity
+    of a paper. The same baseline cited across many comparison tables resolves to
+    a single entity here, turning a pile of isolated tables into a linked graph.
+    """
+    __tablename__ = "paper_entities"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Deterministic identity key: normalized DOI if present, else a slug of the title.
+    canonical_key: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    canonical_title: Mapped[str] = mapped_column(String(500), nullable=False)
+    authors: Mapped[Optional[List[str]]] = mapped_column(JSONB, nullable=True)
+    doi: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    mention_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, server_default=text("CURRENT_TIMESTAMP"))
+
+    mentions: Mapped[List["ExtractedRowModel"]] = relationship(
+        "ExtractedRowModel", back_populates="entity"
+    )
+
+
 class ExtractedRowModel(Base):
     """
     Represents the 'extracted_rows' table.
@@ -114,6 +136,13 @@ class ExtractedRowModel(Base):
     is_proposed_method: Mapped[bool] = mapped_column(Boolean, default=False)
     bibliographic_metadata: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     domain_properties: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # Grounding: list of {field, quote} verbatim source excerpts for this row.
+    evidence: Mapped[Optional[List[Dict[str, str]]]] = mapped_column(JSONB, nullable=True)
+    # Entity resolution: canonical paper this row is a mention of.
+    entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("paper_entities.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, server_default=text("CURRENT_TIMESTAMP"))
 
     comparison_table: Mapped["ComparisonTableModel"] = relationship("ComparisonTableModel", back_populates="rows")
+    entity: Mapped[Optional["PaperEntityModel"]] = relationship("PaperEntityModel", back_populates="mentions")

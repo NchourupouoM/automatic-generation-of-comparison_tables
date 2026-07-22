@@ -46,6 +46,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-5 w-5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
           <span>Template Registry</span>
         </button>
+        <button data-tab="entities" class="nav-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-5 w-5"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><circle cx="6" cy="18" r="3"/><path d="M9 6h6a3 3 0 0 1 3 3v6M6 9v6"/></svg>
+          <span>Paper Entities</span>
+        </button>
         <button data-tab="history" class="nav-link">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-5 w-5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           <span>History Archive</span>
@@ -180,6 +184,12 @@
             <div id="templates-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"></div>
           </section>
 
+          <!-- ---------- TAB: ENTITIES ---------- -->
+          <section data-pane="entities" class="hidden">
+            <p class="mb-4 text-sm text-slate-500">Canonical papers de-duplicated across every comparison table. A paper cited as a baseline in many studies appears here once, with all its appearances linked.</p>
+            <div id="entities-grid" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"></div>
+          </section>
+
           <!-- ---------- TAB: HISTORY ---------- -->
           <section data-pane="history" class="hidden">
             <div class="card overflow-hidden p-0">
@@ -233,12 +243,21 @@
         <div class="mb-3 flex justify-end">
           <button id="btn-download-history-csv" class="btn-success">Download CSV</button>
         </div>
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead><tr id="modal-history-headers" class="text-left text-xs uppercase tracking-wide text-slate-400"></tr></thead>
-            <tbody id="modal-history-body" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
-          </table>
-        </div>
+        <div id="modal-history-container"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="entity-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="modal-entity-title" class="font-semibold">Paper entity</h3>
+        <button data-close-modal="entity-modal" class="modal-x">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="modal-entity-meta" class="mb-4 text-sm text-slate-500"></div>
+        <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Appears in</p>
+        <div id="modal-entity-mentions" class="space-y-2"></div>
       </div>
     </div>
   </div>

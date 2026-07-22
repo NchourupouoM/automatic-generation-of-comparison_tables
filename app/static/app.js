@@ -52,6 +52,7 @@ const TAB_TITLES = {
   extraction: "New Extraction",
   hitl: "Validation Queue",
   templates: "Template Registry",
+  entities: "Paper Entities",
   history: "History Archive",
 };
 function openSidebar(open) {
@@ -69,6 +70,7 @@ function activateTab(tab) {
   if (tab === "templates") renderTemplates();
   if (tab === "history") renderHistory();
   if (tab === "hitl") renderQueue();
+  if (tab === "entities") renderEntities();
 }
 $$("#nav .nav-link").forEach((btn) =>
   btn.addEventListener("click", () => activateTab(btn.dataset.tab))
@@ -389,19 +391,59 @@ function flattenRow(row) {
 
 function buildTable(rows, markProposed = true) {
   const flat = rows.map(flattenRow);
-  const headers = Object.keys(flat[0]);
+  const headers = Object.keys(flat[0]);           // data columns (also used for CSV)
+  const anyEvidence = rows.some((r) => (r.evidence || []).length);
+
   const shell = document.createElement("div");
   shell.className = "table-shell overflow-x-auto";
   const table = document.createElement("table");
   table.className = "data-table";
-  table.innerHTML = `<thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>`;
+
+  const thead = document.createElement("thead");
+  thead.innerHTML = `<tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}${anyEvidence ? "<th>Source</th>" : ""}</tr>`;
+  table.appendChild(thead);
+
   const tbody = document.createElement("tbody");
+  const colSpan = headers.length + (anyEvidence ? 1 : 0);
+
   flat.forEach((r, i) => {
     const tr = document.createElement("tr");
     if (markProposed && rows[i].is_proposed_method) tr.className = "proposed";
     tr.innerHTML = headers.map((h) => `<td>${esc(String(r[h]))}</td>`).join("");
+
+    const evidence = rows[i].evidence || [];
+    if (anyEvidence) {
+      const td = document.createElement("td");
+      if (evidence.length) {
+        const btn = document.createElement("button");
+        btn.className = "btn-ghost text-xs";
+        btn.textContent = `🔍 ${evidence.length}`;
+        btn.title = "Show source quotes";
+        td.appendChild(btn);
+        tr.appendChild(td);
+
+        const detail = document.createElement("tr");
+        detail.className = "hidden";
+        const dtd = document.createElement("td");
+        dtd.colSpan = colSpan;
+        dtd.className = "bg-slate-50 dark:bg-slate-800/40";
+        dtd.innerHTML =
+          `<div class="space-y-1 py-1 text-xs text-slate-600 dark:text-slate-300">` +
+          evidence.map((e) =>
+            `<div><span class="font-semibold">${esc(e.field)}</span>: <span class="italic">“${esc(e.quote)}”</span></div>`
+          ).join("") + `</div>`;
+        detail.appendChild(dtd);
+
+        btn.addEventListener("click", () => detail.classList.toggle("hidden"));
+        tbody.appendChild(tr);
+        tbody.appendChild(detail);
+        return;
+      }
+      tr.appendChild(td); // empty source cell
+    }
     tbody.appendChild(tr);
   });
+
   table.appendChild(tbody);
   shell.appendChild(table);
   return { shell, headers, flat };
@@ -549,6 +591,70 @@ async function renderTemplates() {
   }
 }
 
+/* ---------- paper entities (cross-paper resolution) ---------- */
+async function renderEntities() {
+  const grid = $("#entities-grid");
+  grid.innerHTML = `<p class="text-sm text-slate-400">Loading…</p>`;
+  try {
+    const data = await api("/entities");
+    const entities = data.entities || [];
+    grid.innerHTML = "";
+    if (!entities.length) {
+      grid.innerHTML = `<div class="card text-sm text-slate-500">No papers yet. Run an extraction — papers and their baselines will be de-duplicated here.</div>`;
+      return;
+    }
+    entities.forEach((e) => {
+      const card = document.createElement("div");
+      card.className = "card cursor-pointer transition hover:border-teal-400";
+      const multi = e.mention_count > 1;
+      card.innerHTML = `
+        <div class="mb-2 flex items-start justify-between gap-2">
+          <h3 class="text-sm font-semibold text-slate-900 dark:text-white">${esc(e.canonical_title)}</h3>
+          <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${multi ? "bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300" : "bg-slate-100 text-slate-500 dark:bg-slate-800"}">
+            ${e.mention_count}×
+          </span>
+        </div>
+        <p class="text-xs text-slate-500">${esc((e.authors || []).join(", ") || "Authors unknown")}</p>
+        ${e.doi ? `<p class="mt-1 text-xs text-slate-400">DOI: <code>${esc(e.doi)}</code></p>` : ""}
+        ${multi ? `<p class="mt-2 text-xs font-medium text-teal-600">Cited across ${e.mention_count} tables →</p>` : `<p class="mt-2 text-xs text-slate-400">Appears once →</p>`}`;
+      card.addEventListener("click", () => openEntity(e.id));
+      grid.appendChild(card);
+    });
+  } catch (err) {
+    grid.innerHTML = `<div class="card text-sm text-rose-500">Could not load entities: ${esc(err.message)}</div>`;
+  }
+}
+
+async function openEntity(id) {
+  try {
+    const e = await api(`/entities/${id}`);
+    $("#modal-entity-title").textContent = e.canonical_title;
+    $("#modal-entity-meta").innerHTML =
+      `${esc((e.authors || []).join(", ") || "Authors unknown")}` +
+      (e.doi ? ` · DOI <code>${esc(e.doi)}</code>` : "") +
+      ` · referenced <span class="font-semibold text-teal-600">${e.mention_count}×</span>`;
+    const box = $("#modal-entity-mentions");
+    box.innerHTML = "";
+    (e.mentions || []).forEach((m) => {
+      const row = document.createElement("button");
+      row.className = "table-shell flex w-full items-center justify-between gap-3 p-3 text-left hover:border-teal-400";
+      row.innerHTML = `
+        <div>
+          <p class="text-sm font-medium text-slate-800 dark:text-slate-200">${esc(m.research_problem)}</p>
+          <p class="text-xs text-slate-400">as “${esc(m.paper_title)}” · ${esc(m.domain)}</p>
+        </div>
+        <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${m.is_proposed_method ? "bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300" : "bg-slate-100 text-slate-500 dark:bg-slate-800"}">
+          ${m.is_proposed_method ? "proposed" : "baseline"}
+        </span>`;
+      row.addEventListener("click", () => { closeModal("entity-modal"); openHistory(m.table_id); });
+      box.appendChild(row);
+    });
+    openModal("entity-modal");
+  } catch (err) {
+    toast(`Could not open entity: ${err.message}`, "error");
+  }
+}
+
 /* ---------- history ---------- */
 async function renderHistory() {
   const body = $("#history-body");
@@ -589,11 +695,10 @@ async function openHistory(tableId) {
     const t = (payload.tables || [])[0];
     if (!t) { toast("Empty table.", "error"); return; }
     $("#modal-history-title").textContent = t.research_problem || "Comparison table";
-    const { headers, flat } = buildTable(t.rows);
-    $("#modal-history-headers").innerHTML = headers.map((h) => `<th class="pb-2 pr-3">${esc(h)}</th>`).join("");
-    $("#modal-history-body").innerHTML = flat.map((r, i) =>
-      `<tr class="${t.rows[i].is_proposed_method ? "proposed" : ""}">${headers.map((h) => `<td class="px-3 py-2">${esc(String(r[h]))}</td>`).join("")}</tr>`
-    ).join("");
+    const { shell, headers, flat } = buildTable(t.rows);
+    const container = $("#modal-history-container");
+    container.innerHTML = "";
+    container.appendChild(shell);
     const dl = $("#btn-download-history-csv");
     dl.replaceWith(dl.cloneNode(true));
     $("#btn-download-history-csv").addEventListener("click", () => downloadCSV(toCSV(headers, flat), "comparison_table.csv"));
