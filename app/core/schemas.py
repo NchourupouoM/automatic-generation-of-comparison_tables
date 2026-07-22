@@ -17,9 +17,25 @@ class CustomProperty(BaseModel):
     )
 
 
+class EvidenceItem(BaseModel):
+    """
+    Grounds a single extracted value in the source text: the field it supports
+    and a short verbatim quote copied from the paper. Enables one-click human
+    verification of every cell in the comparison table.
+    """
+    field: str = Field(
+        ...,
+        description="The name of the field this quote supports (e.g. 'authors', 'accuracy', 'publication_year')."
+    )
+    quote: str = Field(
+        ...,
+        description="A short, VERBATIM excerpt (max ~240 chars) copied exactly from the paper that supports the extracted value."
+    )
+
+
 class ComparisonRow(BaseModel):
     """
-    Represents a single row in the comparative matrix, capturing bibliographic 
+    Represents a single row in the comparative matrix, capturing bibliographic
     and domain-specific semantic properties of a research paper.
     """
     
@@ -82,6 +98,11 @@ class ComparisonRow(BaseModel):
     domain_specific_properties: List[CustomProperty] = Field(
         default_factory=list,
         description="A list of custom domain-specific semantic properties (Phi) extracted for comparison."
+    )
+
+    evidence: List[EvidenceItem] = Field(
+        default_factory=list,
+        description="Grounding: for each important extracted value, a {field, quote} pair whose quote is copied verbatim from the paper."
     )
 
 

@@ -168,6 +168,18 @@ comparative matrix matching the target schema from the provided paper context.
      and cased identically across every row for the same metric.
    - A metric not reported for a given row still gets an entry with
      `property_value: "N/A"` — never omit the property.
+
+5. Evidence grounding (traceability):
+   - For every non-trivial value you extract (each comparative metric, and
+     key bibliographic fields like authors/year/venue), add an entry to the
+     row's `evidence` list: `{"field": "<field_name>", "quote": "<verbatim>"}`.
+   - The quote MUST be copied character-for-character from the paper context,
+     max ~240 characters, enough to let a human verify the value at a glance.
+   - `field` must match the field it supports: a bibliographic field name
+     (e.g. "authors", "publication_year") or a `property_name` from
+     `domain_specific_properties` (e.g. "accuracy").
+   - Do NOT invent quotes. If a value is inferred or is "N/A", omit its
+     evidence entry rather than fabricating a source.
 </extraction_protocol>
 
 <thinking>

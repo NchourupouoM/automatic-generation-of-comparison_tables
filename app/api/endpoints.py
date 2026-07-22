@@ -18,7 +18,9 @@ from app.core.models import (
     TemplateModel,
     ValidationTaskModel,
     ComparisonTableModel,
-    ProceedingChunkModel
+    ExtractedRowModel,
+    ProceedingChunkModel,
+    PaperEntityModel,
 )
 
 from app.core.parse_pdf import extract_pdf_to_markdown, split_proceeding_pdf
@@ -514,7 +516,9 @@ async def get_finalized_comparison(table_id: str):
                 "authors": row.authors or [],
                 "is_proposed_method": row.is_proposed_method,
                 "domain_specific_properties": row.domain_properties,
-                **row.bibliographic_metadata
+                "evidence": row.evidence or [],
+                "entity_id": str(row.entity_id) if row.entity_id else None,
+                **(row.bibliographic_metadata or {})
             })
             
         # CORRECTIF UNIFIÉ : Retourne le format attendu par le moteur de rendu JavaScript [3]
@@ -530,6 +534,81 @@ async def get_finalized_comparison(table_id: str):
                     }
                 ]
             }
+        }
+
+
+# ---------------------------------------------------------------------------
+# Entity Resolution : papiers canoniques dé-dupliqués et leurs occurrences
+# ---------------------------------------------------------------------------
+@router.get("/entities")
+async def list_paper_entities(
+    limit: Optional[int] = Query(default=None, ge=1),
+    offset: Optional[int] = Query(default=None, ge=0),
+):
+    """Lists canonical papers, most-referenced first. A single entity here may be
+    cited as a baseline across many comparison tables."""
+    safe_limit, safe_offset = clamp_pagination(limit, offset, settings.DEFAULT_PAGE_SIZE, settings.MAX_PAGE_SIZE)
+    with SessionLocal() as db:
+        total = db.query(PaperEntityModel).count()
+        entities = (
+            db.query(PaperEntityModel)
+            .order_by(PaperEntityModel.mention_count.desc(), PaperEntityModel.created_at.desc())
+            .offset(safe_offset).limit(safe_limit).all()
+        )
+        return {
+            "total": total,
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "entities": [
+                {
+                    "id": str(e.id),
+                    "canonical_title": e.canonical_title,
+                    "authors": e.authors or [],
+                    "doi": e.doi,
+                    "mention_count": e.mention_count,
+                }
+                for e in entities
+            ],
+        }
+
+
+@router.get("/entities/{entity_id}")
+async def get_paper_entity(entity_id: str):
+    """Returns a canonical paper and every place it appears (which comparison
+    table, and whether it was the proposed method or a baseline there)."""
+    try:
+        entity_uuid = uuid.UUID(entity_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid entity ID format.")
+
+    with SessionLocal() as db:
+        entity = db.query(PaperEntityModel).filter(PaperEntityModel.id == entity_uuid).first()
+        if not entity:
+            raise HTTPException(status_code=404, detail="Entity not found.")
+
+        mentions = (
+            db.query(ExtractedRowModel, ComparisonTableModel)
+            .join(ComparisonTableModel, ExtractedRowModel.table_id == ComparisonTableModel.id)
+            .filter(ExtractedRowModel.entity_id == entity_uuid)
+            .order_by(ComparisonTableModel.created_at.desc())
+            .all()
+        )
+        return {
+            "id": str(entity.id),
+            "canonical_title": entity.canonical_title,
+            "authors": entity.authors or [],
+            "doi": entity.doi,
+            "mention_count": entity.mention_count,
+            "mentions": [
+                {
+                    "table_id": str(tbl.id),
+                    "research_problem": tbl.research_problem,
+                    "domain": tbl.domain or "default",
+                    "paper_title": row.paper_title,
+                    "is_proposed_method": row.is_proposed_method,
+                }
+                for row, tbl in mentions
+            ],
         }
 
 
