@@ -6,16 +6,8 @@
     <title>ORKG · Scientific Comparison Extractor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      // Guard so a slow/blocked CDN never throws; the app still works via style.css.
-      if (window.tailwind) {
-        tailwind.config = {
-          darkMode: "class",
-          theme: { extend: { fontFamily: { sans: ["Inter", "system-ui", "sans-serif"] } } },
-        };
-      }
-    </script>
+    <!-- Tailwind compiled locally (no CDN dependency) — rebuild via tools/build_css.sh -->
+    <link rel="stylesheet" href="tailwind.css" />
     <link rel="stylesheet" href="style.css" />
 </head>
 <body class="h-full bg-slate-50 text-slate-800 antialiased dark:bg-slate-950 dark:text-slate-200">
