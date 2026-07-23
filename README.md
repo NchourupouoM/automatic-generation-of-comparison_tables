@@ -315,10 +315,14 @@ GET /api/v1/entities/{id}       # a paper and every table it appears in (propose
 The **Paper Entities** tab surfaces this graph: a baseline cited in five tables
 shows up once, marked `5×`, linking through to each appearance.
 
-> Note: both features add columns/tables (`extracted_rows.evidence`,
-> `extracted_rows.entity_id`, `paper_entities`). Fresh installs get them via
-> `Base.metadata.create_all`; existing databases need a one-time migration to add
-> them.
+> **Schema upgrades are automatic and safe.** These features add columns
+> (`extracted_rows.evidence`, `extracted_rows.entity_id`) and a table
+> (`paper_entities`). Fresh installs get them via `Base.metadata.create_all`;
+> **existing production databases are upgraded in place on startup** by
+> `ensure_additive_upgrades()` (in `app/core/database.py`), which only ever runs
+> additive, idempotent `ADD COLUMN IF NOT EXISTS` for new *nullable* columns.
+> Legacy rows simply read back as empty (`evidence: []`, `entity_id: null`), so a
+> deploy onto a live database cannot break existing data.
 
 ---
 

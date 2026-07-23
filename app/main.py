@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from app.api.endpoints import router as api_router
 
-from app.core.database import engine, Base
+from app.core.database import engine, Base, ensure_additive_upgrades
 import app.core.models
 import logging
 from dotenv import load_dotenv
@@ -14,15 +14,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # 1. INITIALISATION AUTOMATIQUE DES TABLES DANS CLOUD SQL [3]
 # ---------------------------------------------------------------------------
-# La méthode 'create_all' est totalement idempotente : elle va créer les tables 
-# manquantes lors du premier démarrage, mais n'écrasera pas les données existantes 
-# lors des redémarrages ultérieurs du serveur [3].
+# 'create_all' crée les tables manquantes mais n'altère jamais une table
+# existante. 'ensure_additive_upgrades' complète ce comportement en ajoutant, de
+# façon idempotente et non destructive, les nouvelles colonnes nullables à une
+# base de données déjà en production — évitant toute erreur au déploiement.
 try:
     logger.info("Initializing Google Cloud SQL tables if missing...")
     Base.metadata.create_all(bind=engine)
-    logger.info("Database tables successfully checked and initialized in PostgreSQL.")
+    ensure_additive_upgrades()
+    logger.info("Database schema successfully checked, initialized, and upgraded in PostgreSQL.")
 except Exception as e:
-    logger.error(f"❌ Failed to auto-create database tables on startup: {str(e)}")
+    logger.error(f"❌ Failed to auto-create/upgrade database schema on startup: {str(e)}")
 
 
 app = FastAPI(
